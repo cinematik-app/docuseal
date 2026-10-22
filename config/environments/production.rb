@@ -127,8 +127,16 @@ Rails.application.configure do
 
   # Set ENCRYPTION_SECRET_PREVIOUS only while rotating: rows still decrypt with the old secret,
   # `rails encryption:reencrypt` rewrites them with the current one, then unset it.
+  # A previous scheme takes a key provider, and the provider must derive with the old salt,
+  # which the default generator reads from the current config.
   if ENV['ENCRYPTION_SECRET_PREVIOUS'].present?
-    config.active_record.encryption[:previous] = [encryption_keys.call(ENV['ENCRYPTION_SECRET_PREVIOUS'])]
+    previous = encryption_keys.call(ENV['ENCRYPTION_SECRET_PREVIOUS'])
+    previous_generator = Class.new(ActiveRecord::Encryption::KeyGenerator) do
+      define_method(:key_derivation_salt) { previous[:key_derivation_salt] }
+    end.new
+    previous_provider = ActiveRecord::Encryption::DerivedSecretKeyProvider.new(previous[:primary_key], key_generator: previous_generator)
+
+    config.active_record.encryption[:previous] = [{ key_provider: previous_provider }]
   end
 
   ActiveRecord::Encryption.configure(**config.active_record.encryption)
