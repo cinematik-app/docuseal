@@ -2,11 +2,12 @@
 
 class TestingApiSettingsController < ApplicationController
   def index
+    raise CanCan::AccessDenied unless current_account.testing?
+
     authorize!(:manage, current_user.access_token)
 
-    @webhook_config =
-      current_account.encrypted_configs.find_or_initialize_by(key: EncryptedConfig::WEBHOOK_URL_KEY)
+    @webhook_url = current_account.webhook_urls.first_or_initialize
 
-    authorize!(:manage, @webhook_config)
+    authorize!(:manage, @webhook_url)
   end
 end

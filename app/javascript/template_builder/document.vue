@@ -4,24 +4,47 @@
       v-for="(image, index) in sortedPreviewImages"
       :key="image.id"
       :ref="setPageRefs"
+      :input-mode="inputMode"
+      :conditional-field-index="conditionalFieldIndex"
+      :formula-values-index="formulaValuesIndex"
       :number="index"
       :editable="editable"
+      :data-page="index"
       :areas="areasIndex[index]"
       :allow-draw="allowDraw"
+      :with-signature-id="withSignatureId"
+      :with-prefillable="withPrefillable"
       :is-drag="isDrag"
+      :is-mobile="isMobile"
+      :with-field-placeholder="withFieldPlaceholder"
       :default-fields="defaultFields"
+      :drag-field-placeholder="dragFieldPlaceholder"
       :default-submitters="defaultSubmitters"
       :draw-field="drawField"
+      :draw-field-type="drawFieldType"
+      :draw-custom-field="drawCustomField"
       :selected-submitter="selectedSubmitter"
+      :total-pages="sortedPreviewImages.length"
       :image="image"
-      @drop-field="$emit('drop-field', {...$event, attachment_uuid: document.uuid })"
+      :attachment-uuid="document.uuid"
+      :with-fields-detection="withFieldsDetection"
+      @drop-field="$emit('drop-field', { ...$event, attachment_uuid: document.uuid })"
       @remove-area="$emit('remove-area', $event)"
-      @draw="$emit('draw', {...$event, attachment_uuid: document.uuid })"
+      @copy-field="$emit('copy-field', $event)"
+      @paste-field="$emit('paste-field', { ...$event, attachment_uuid: document.uuid })"
+      @add-custom-field="$emit('add-custom-field', $event)"
+      @set-draw="$emit('set-draw', $event)"
+      @copy-selected-areas="$emit('copy-selected-areas')"
+      @delete-selected-areas="$emit('delete-selected-areas')"
+      @autodetect-fields="$emit('autodetect-fields', $event)"
+      @scroll-to="scrollToArea"
+      @draw="$emit('draw', { area: {...$event.area, attachment_uuid: document.uuid }, isTooSmall: $event.isTooSmall })"
     />
   </div>
 </template>
 <script>
 import Page from './page'
+import { reactive } from 'vue'
 
 export default {
   name: 'TemplateDocument',
@@ -33,6 +56,26 @@ export default {
       type: Object,
       required: true
     },
+    dragFieldPlaceholder: {
+      type: Object,
+      required: false,
+      default: null
+    },
+    inputMode: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
+    conditionalFieldIndex: {
+      type: Object,
+      required: false,
+      default: () => ({})
+    },
+    formulaValuesIndex: {
+      type: Object,
+      required: false,
+      default: () => ({})
+    },
     areasIndex: {
       type: Object,
       required: false,
@@ -43,10 +86,35 @@ export default {
       required: false,
       default: () => []
     },
+    withFieldPlaceholder: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
+    withSignatureId: {
+      type: Boolean,
+      required: false,
+      default: null
+    },
+    withPrefillable: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
+    drawFieldType: {
+      type: String,
+      required: false,
+      default: ''
+    },
     defaultSubmitters: {
       type: Array,
       required: false,
       default: () => []
+    },
+    isMobile: {
+      type: Boolean,
+      required: false,
+      default: false
     },
     allowDraw: {
       type: Boolean,
@@ -67,6 +135,11 @@ export default {
       required: false,
       default: null
     },
+    drawCustomField: {
+      type: Object,
+      required: false,
+      default: null
+    },
     baseUrl: {
       type: String,
       required: false,
@@ -76,9 +149,19 @@ export default {
       type: Boolean,
       required: false,
       default: false
+    },
+    pagePreviewFormat: {
+      type: String,
+      required: false,
+      default: '.jpg'
+    },
+    withFieldsDetection: {
+      type: Boolean,
+      required: false,
+      default: false
     }
   },
-  emits: ['draw', 'drop-field', 'remove-area'],
+  emits: ['draw', 'drop-field', 'remove-area', 'paste-field', 'copy-field', 'copy-selected-areas', 'delete-selected-areas', 'autodetect-fields', 'add-custom-field', 'set-draw'],
   data () {
     return {
       pageRefs: []
@@ -96,14 +179,14 @@ export default {
       return this.document.metadata?.pdf?.number_of_pages || this.document.preview_images.length
     },
     sortedPreviewImages () {
-      const lazyloadMetadata = this.document.preview_images[this.document.preview_images.length - 1].metadata
+      const lazyloadMetadata = this.document.preview_images[this.document.preview_images.length - 1]?.metadata || { width: 1400, height: 1812 }
 
       return [...Array(this.numberOfPages).keys()].map((i) => {
-        return this.previewImagesIndex[i] || {
-          metadata: lazyloadMetadata,
+        return this.previewImagesIndex[i] || reactive({
+          metadata: { ...lazyloadMetadata },
           id: Math.random().toString(),
-          url: this.basePreviewUrl + `/preview/${this.document.uuid}/${i}.jpg`
-        }
+          url: this.basePreviewUrl + `/preview/${this.document.signed_key || this.document.signed_uuid || this.document.uuid}/${i}${this.pagePreviewFormat}`
+        })
       })
     },
     previewImagesIndex () {
@@ -119,7 +202,17 @@ export default {
   },
   methods: {
     scrollToArea (area) {
-      this.pageRefs[area.page].areaRefs.find((e) => e.area === area).$el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      this.$nextTick(() => {
+        const pageRef = this.pageRefs[area.page]
+
+        if (pageRef && pageRef.areaRefs) {
+          const areaRef = pageRef.areaRefs.find((e) => e.area === area)
+
+          if (areaRef && areaRef.$el) {
+            areaRef.$el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          }
+        }
+      })
     },
     setPageRefs (el) {
       if (el) {

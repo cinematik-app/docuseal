@@ -6,10 +6,29 @@ class TemplatesArchivedSubmissionsController < ApplicationController
 
   def index
     @submissions = @submissions.where.not(archived_at: nil)
-    @submissions = Submissions.search(@submissions, params[:q])
+    @submissions = Submissions.search(current_user, @submissions, params[:q], search_values: true)
+    @submissions = Submissions::Filter.call(@submissions, current_user, params)
 
-    @pagy, @submissions = pagy(@submissions.preload(:submitters).order(id: :desc))
+    @submissions = if params[:completed_at_from].present? || params[:completed_at_to].present?
+                     @submissions.order(completed_at: :desc)
+                   else
+                     @submissions.order(id: :desc)
+                   end
+
+    @pagy, @submissions = pagy_auto(@submissions.select_for_list.preload(submitters: :start_form_submission_events))
+
+    render_infinite_scroll(@pagy, @submissions, @template) if turbo_infinite_scroll?
   rescue ActiveRecord::RecordNotFound
     redirect_to root_path
+  end
+
+  private
+
+  def render_infinite_scroll(pagy, submissions, template)
+    render turbo_stream: [
+      turbo_stream.before('infinite_scroll', partial: 'templates/submission', collection: submissions,
+                                             locals: { template:, archived: true }),
+      turbo_stream.replace('infinite_scroll', partial: 'shared/infinite_scroll', locals: { pagy: })
+    ]
   end
 end

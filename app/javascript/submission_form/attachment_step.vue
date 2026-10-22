@@ -1,7 +1,11 @@
 <template>
   <div>
-    <div v-if="value.length">
-      <div
+    <ul
+      v-if="value.length"
+      :aria-label="t('uploaded_files')"
+      class="list-none p-0 m-0"
+    >
+      <li
         v-for="(val, index) in value"
         :key="index"
         class="flex mb-2"
@@ -13,27 +17,34 @@
         >
         <a
           v-if="val"
-          class="flex items-center space-x-1.5 w-full"
+          class="flex items-center space-x-1.5 w-full attachment-file-name"
           :href="attachmentsIndex[val].url"
           target="_blank"
         >
           <IconPaperclip
             :width="16"
             class="flex-none"
-            :heigh="16"
+            :height="16"
+            aria-hidden="true"
           />
           <span>
             {{ attachmentsIndex[val].filename }}
           </span>
         </a>
-        <button @click.prevent="removeAttachment(val)">
+        <button
+          type="button"
+          class="remove-attachment-button"
+          :aria-label="`${t('clear')} ${attachmentsIndex[val].filename}`"
+          @click.prevent="removeAttachment(val)"
+        >
           <IconTrashX
             :width="18"
-            :heigh="19"
+            :height="19"
+            aria-hidden="true"
           />
         </button>
-      </div>
-    </div>
+      </li>
+    </ul>
     <template v-else>
       <input
         value=""
@@ -41,11 +52,18 @@
         :name="`values[${field.uuid}][]`"
       >
     </template>
+    <div
+      v-if="field.description && !modelValue.length"
+      dir="auto"
+      class="mb-3 px-1 field-description-text"
+    >
+      <MarkdownContent :string="field.description" />
+    </div>
     <FileDropzone
-      :message="`${t('upload')} ${field.name || t('files')}${field.required ? '' : ` (${t('optional')})`}`"
+      :message="`${t('upload')} ${(field.title || field.name) || t('files')}${field.required ? '' : ` (${t('optional')})`}`"
       :submitter-slug="submitterSlug"
-      :is-direct-upload="isDirectUpload"
       :multiple="true"
+      :dry-run="dryRun"
       @upload="onUpload"
     />
   </div>
@@ -53,12 +71,14 @@
 
 <script>
 import FileDropzone from './dropzone'
+import MarkdownContent from './markdown_content'
 import { IconPaperclip, IconTrashX } from '@tabler/icons-vue'
 
 export default {
   name: 'AttachmentStep',
   components: {
     FileDropzone,
+    MarkdownContent,
     IconPaperclip,
     IconTrashX
   },
@@ -72,15 +92,15 @@ export default {
       type: String,
       required: true
     },
+    dryRun: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
     attachmentsIndex: {
       type: Object,
       required: false,
       default: () => ({})
-    },
-    isDirectUpload: {
-      type: Boolean,
-      required: true,
-      default: false
     },
     modelValue: {
       type: Array,

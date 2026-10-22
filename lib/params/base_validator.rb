@@ -2,6 +2,8 @@
 
 module Params
   class BaseValidator
+    EMAIL_REGEXP = User::FULL_EMAIL_REGEXP
+
     InvalidParameterError = Class.new(StandardError)
 
     def self.call(...)
@@ -9,7 +11,7 @@ module Params
 
       validator.call
     rescue InvalidParameterError => e
-      Rollbar.error(e) if defined?(Rollbar)
+      Rollbar.warning(e) if defined?(Rollbar)
 
       raise e unless validator.dry_run?
     rescue StandardError => e
@@ -65,12 +67,35 @@ module Params
       raise_error(message || "#{key} must follow the #{regexp.source} format")
     end
 
-    def in_path(params, path = [])
+    def email_format(params, key, message: nil)
+      return if params.blank?
+      return if params[key].blank?
+      return if params[key].to_s.include?('<')
+
+      if params[key].to_s.strip.split(%r{\s*[;,/]\s*}).compact_blank
+                    .all? { |email| EmailTypo::DotCom.call(email).match?(EMAIL_REGEXP) || email.include?('--') }
+        return
+      end
+
+      raise_error(message || "#{key} must follow the email format: '#{params[key]}'")
+    end
+
+    def unique_value(params, key, message: nil)
+      return unless params.is_a?(Array)
+      return if params.none?
+      return if params.all? { |p| p[key].blank? }
+      return if params.pluck(key).compact_blank.uniq.size == params.pluck(key).compact_blank.size
+
+      raise_error(message || "#{key} must be unique")
+    end
+
+    def in_path(params, path = [], skip_blank: false)
       old_path = @current_path
 
-      @current_path = [old_path, *path].compact_blank.map(&:to_s).join('.')
+      @current_path = [old_path, *path].compact_blank.join('.')
 
       param = params.dig(*path)
+      param = nil if skip_blank && param.blank?
 
       yield params.dig(*path) if param
 
@@ -81,7 +106,7 @@ module Params
       old_path = @current_path
 
       params.dig(*path)&.each_with_index do |item, index|
-        @current_path = [old_path, [*path].map(&:to_s).join('.') + "[#{index}]"].compact_blank.join('.')
+        @current_path = [old_path, [*path].join('.') + "[#{index}]"].compact_blank.join('.')
 
         yield item if item
       end

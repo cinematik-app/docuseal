@@ -1,23 +1,36 @@
 <template>
   <div
-    class="mx-auto max-w-md flex flex-col"
+    id="form_completed"
+    class="mx-auto max-w-md flex flex-col completed-form"
     dir="auto"
+    role="status"
+    tabindex="-1"
   >
-    <p class="font-medium text-2xl flex items-center space-x-1.5 mx-auto">
+    <div class="font-medium text-2xl flex items-center space-x-1.5 mx-auto">
       <IconCircleCheck
         class="inline text-green-600"
+        aria-hidden="true"
         :width="30"
         :height="30"
       />
-      <span>
-        {{ t('form_has_been_completed') }}
+      <span class="completed-form-message-title">
+        {{ completedMessage.title || (hasSignatureFields ? (hasMultipleDocuments ? t('documents_have_been_signed') : t('document_has_been_signed')) : t('form_has_been_completed')) }}
       </span>
-    </p>
+    </div>
+    <div
+      v-if="completedMessage.body"
+      class="mt-2 completed-form-message-body"
+    >
+      <MarkdownContent
+        :string="completedMessage.body"
+      />
+    </div>
     <div class="space-y-3 mt-5">
       <a
         v-if="completedButton.url"
-        :href="completedButton.url"
-        class="white-button flex items-center w-full"
+        :href="sanitizeUrl(completedButton.url)"
+        rel="noopener noreferrer nofollow"
+        class="white-button flex items-center w-full completed-form-completed-button"
       >
         <span>
           {{ completedButton.title || 'Back to Website' }}
@@ -25,30 +38,38 @@
       </a>
       <button
         v-if="canSendEmail && !isDemo && withSendCopyButton"
-        class="white-button !h-auto flex items-center space-x-1 w-full"
+        class="white-button !h-auto flex items-center space-x-1 w-full completed-form-send-copy-button"
         :disabled="isSendingCopy"
         @click.prevent="sendCopyToEmail"
       >
         <IconInnerShadowTop
           v-if="isSendingCopy"
           class="animate-spin"
+          aria-hidden="true"
         />
-        <IconMail v-else />
+        <IconMail
+          v-else
+          aria-hidden="true"
+        />
         <span>
           {{ t('send_copy_via_email') }}
         </span>
       </button>
       <button
-        v-if="!isWebView && withDownloadButton"
-        class="base-button flex items-center space-x-1 w-full"
+        v-if="(!isWebView || isNativeApp) && withDownloadButton"
+        class="base-button flex items-center space-x-1 w-full completed-form-download-button"
         :disabled="isDownloading"
         @click.prevent="download"
       >
         <IconInnerShadowTop
           v-if="isDownloading"
           class="animate-spin"
+          aria-hidden="true"
         />
-        <IconDownload v-else />
+        <IconDownload
+          v-else
+          aria-hidden="true"
+        />
         <span>
           {{ t('download') }}
         </span>
@@ -66,7 +87,7 @@
       </a>
       <a
         v-if="isDemo"
-        href="https://docuseal.co/sign_up"
+        href="https://docuseal.com/sign_up"
         class="white-button flex items-center space-x-1 w-full"
       >
         <IconLogin />
@@ -79,9 +100,9 @@
       v-if="attribution"
       class="text-center mt-4"
     >
-      {{ t('signed_with') }}
+      {{ t('powered_by') }}
       <a
-        href="https://www.docuseal.co/start"
+        href="https://www.docuseal.com/start"
         target="_blank"
         class="underline"
       >DocuSeal</a> - {{ t('open_source_documents_software') }}
@@ -91,10 +112,13 @@
 
 <script>
 import { IconCircleCheck, IconBrandGithub, IconMail, IconDownload, IconInnerShadowTop, IconLogin } from '@tabler/icons-vue'
+import MarkdownContent from './markdown_content'
+import { sanitizeUrl } from '@braintree/sanitize-url'
 
 export default {
   name: 'FormCompleted',
   components: {
+    MarkdownContent,
     IconCircleCheck,
     IconInnerShadowTop,
     IconBrandGithub,
@@ -118,6 +142,16 @@ export default {
       required: false,
       default: true
     },
+    hasSignatureFields: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
+    hasMultipleDocuments: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
     withDownloadButton: {
       type: Boolean,
       required: false,
@@ -138,10 +172,25 @@ export default {
       required: false,
       default: false
     },
+    fetchOptions: {
+      type: Object,
+      required: false,
+      default: () => ({})
+    },
     completedButton: {
       type: Object,
       required: false,
       default: () => ({})
+    },
+    completedMessage: {
+      type: Object,
+      required: false,
+      default: () => ({})
+    },
+    nativePlatform: {
+      type: String,
+      required: false,
+      default: ''
     }
   },
   data () {
@@ -151,6 +200,9 @@ export default {
     }
   },
   computed: {
+    isNativeApp () {
+      return !!this.nativePlatform && !!window.webkit?.messageHandlers?.download
+    },
     isWebView () {
       return /webview|wv|ip((?!.*Safari)|(?=.*like Safari))/i.test(window.navigator.userAgent)
     }
@@ -165,8 +217,13 @@ export default {
         spread: 140
       })
     }
+
+    document.querySelectorAll('#decline_button, #decline_button_mobile, #delegate_button, #delegate_button_mobile').forEach((button) => {
+      button.setAttribute('disabled', 'true')
+    })
   },
   methods: {
+    sanitizeUrl,
     sendCopyToEmail () {
       this.isSendingCopy = true
 
@@ -181,13 +238,28 @@ export default {
     download () {
       this.isDownloading = true
 
-      fetch(this.baseUrl + `/submitters/${this.submitterSlug}/download`).then((response) => response.json()).then((urls) => {
-        const isSafariIos = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+      if (this.isNativeApp) {
+        document.addEventListener('native:download-end', () => { this.isDownloading = false }, { once: true })
 
-        if (isSafariIos && urls.length > 1) {
-          this.downloadSafariIos(urls)
+        return window.webkit.messageHandlers.download.postMessage({ src: this.baseUrl + `/s/${this.submitterSlug}/documents` })
+      }
+
+      fetch(this.baseUrl + `/s/${this.submitterSlug}/documents`, {
+        method: 'GET',
+        ...this.fetchOptions
+      }).then(async (response) => {
+        if (response.ok) {
+          const urls = await response.json()
+          const isMobileSafariIos = 'ontouchstart' in window && navigator.maxTouchPoints > 0 && /AppleWebKit/i.test(navigator.userAgent)
+          const isSafariIos = isMobileSafariIos || /iPhone|iPad|iPod/i.test(navigator.userAgent)
+
+          if (isSafariIos && urls.length > 1) {
+            this.downloadSafariIos(urls)
+          } else {
+            this.downloadUrls(urls)
+          }
         } else {
-          this.downloadUrls(urls)
+          alert(this.t('failed_to_download_files'))
         }
       })
     },
@@ -211,9 +283,9 @@ export default {
       fileRequests.reduce(
         (prevPromise, request) => prevPromise.then(() => request()),
         Promise.resolve()
-      )
-
-      this.isDownloading = false
+      ).finally(() => {
+        this.isDownloading = false
+      })
     },
     downloadSafariIos (urls) {
       const fileRequests = urls.map((url) => {

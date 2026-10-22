@@ -1,29 +1,24 @@
 # frozen_string_literal: true
 
 module PdfUtils
+  DEFAULT_DPI = 72
+  US_LETTER_W = DEFAULT_DPI * 8.5
+
   module_function
 
-  def encrypted?(data, password: nil)
-    HexaPDF::Document.new(io: StringIO.new(data), decryption_opts: { password: })
+  def merge(io_files)
+    merged_content = StringIO.new
 
-    false
-  rescue HexaPDF::EncryptionError
-    true
-  end
+    Pdfium.with_instance do
+      Pdfium::Document.create do |merged_pdf|
+        io_files.each do |io|
+          Pdfium::Document.open_io(io) { |pdf| merged_pdf.import_pages(pdf) }
+        end
 
-  def decrypt(data, password)
-    encrypted_doc = HexaPDF::Document.new(io: StringIO.new(data), decryption_opts: { password: })
-
-    decrypted_doc = HexaPDF::Document.new
-
-    encrypted_doc.pages.each do |page|
-      decrypted_doc.pages << decrypted_doc.import(page)
+        merged_pdf.save(merged_content)
+      end
     end
 
-    decrypted_io = StringIO.new
-
-    decrypted_doc.write(decrypted_io, validate: false)
-
-    decrypted_io.tap(&:rewind).read
+    merged_content.tap(&:rewind)
   end
 end

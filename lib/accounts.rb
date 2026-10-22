@@ -1,54 +1,59 @@
 # frozen_string_literal: true
 
 module Accounts
+  LINK_EXPIRES_AT = ENV.fetch('FILE_URLS_EXPIRE_MINUTES', '40').to_i.minutes
+
   module_function
 
-  def create_duplicate(account)
-    new_account = account.dup
+  def users_count(account)
+    rel = User.where(account_id: account.id).or(
+      User.where(account_id: account.account_linked_accounts
+                                           .where.not(account_type: :testing)
+                                           .select(:linked_account_id))
+    )
 
-    new_user = account.users.first.dup
-
-    new_user.uuid = SecureRandom.uuid
-    new_user.account = new_account
-    new_user.encrypted_password = SecureRandom.hex
-    new_user.email = "#{SecureRandom.hex}@docuseal.co"
-
-    account.templates.each do |template|
-      new_template = template.dup
-
-      new_template.account = new_account
-      new_template.slug = SecureRandom.base58(14)
-
-      new_template.archived_at = nil
-      new_template.save!
-
-      Templates::CloneAttachments.call(template: new_template, original_template: template)
-    end
-
-    new_user.save!(validate: false)
-    new_account.templates.update_all(folder_id: new_account.default_template_folder.id)
-
-    new_account
+    rel.where.not(account: account.linked_accounts.where.not(archived_at: nil))
+       .where.not(role: :integration).active.count
   end
 
   def find_or_create_testing_user(account)
-    user = User.find_by(account: account.testing_accounts)
+    user = User.where(role: :admin).order(:id).find_by(account: account.testing_accounts)
 
     return user if user
 
     testing_account = account.dup.tap { |a| a.name = "Testing - #{a.name}" }
+    testing_account.uuid = SecureRandom.uuid
 
     ApplicationRecord.transaction do
       account.testing_accounts << testing_account
 
+      original_email = account.users.order(:id).first.email
+      test_email = generate_unique_test_email(original_email)
+
       testing_account.users.create!(
-        email: account.users.order(:id).first.email.sub('@', '+test@'),
+        email: test_email,
         first_name: 'Testing',
         last_name: 'Environment',
         password: SecureRandom.hex,
         role: :admin
       )
     end
+  end
+
+  def generate_unique_test_email(original_email)
+    base_email = original_email.sub('@', '+test@')
+
+    return base_email unless User.exists?(email: base_email)
+
+    (1..3).each do |i|
+      test_email = original_email.sub('@', "+test#{i}@")
+
+      return test_email unless User.exists?(email: test_email)
+    end
+
+    timestamp = Time.current.to_i
+
+    original_email.sub('@', "+test#{timestamp}@")
   end
 
   def create_default_template(account)
@@ -61,32 +66,38 @@ module Accounts
 
     new_template.save!
 
+    SearchEntries.enqueue_reindex(new_template)
+
     Templates::CloneAttachments.call(template: new_template, original_template: template)
 
     new_template
   end
 
-  def load_webhook_configs(account)
-    configs = account.encrypted_configs.find_by(key: EncryptedConfig::WEBHOOK_URL_KEY)
-
-    unless Docuseal.multitenant?
-      configs ||= Account.order(:id).first.encrypted_configs.find_by(key: EncryptedConfig::WEBHOOK_URL_KEY)
-    end
-
-    configs
+  def load_recipient_form_fields(_account)
+    []
   end
 
   def load_signing_pkcs(account)
     cert_data =
       if Docuseal.multitenant?
-        EncryptedConfig.find_by(account:, key: EncryptedConfig::ESIGN_CERTS_KEY)&.value || Docuseal::CERTS
+        data = EncryptedConfig.find_by(account:, key: EncryptedConfig::ESIGN_CERTS_KEY)&.value
+
+        return Docuseal.default_pkcs if data.blank?
+
+        data
       else
+        return Docuseal.default_pkcs if Docuseal::CERTS.present?
+
         EncryptedConfig.find_by(account:, key: EncryptedConfig::ESIGN_CERTS_KEY)&.value ||
           EncryptedConfig.find_by(key: EncryptedConfig::ESIGN_CERTS_KEY).value
       end
 
     if (default_cert = cert_data['custom']&.find { |e| e['status'] == 'default' })
-      OpenSSL::PKCS12.new(Base64.urlsafe_decode64(default_cert['data']), default_cert['password'].to_s)
+      if default_cert['name'] == Docuseal::AATL_CERT_NAME
+        Docuseal.default_pkcs
+      else
+        OpenSSL::PKCS12.new(Base64.urlsafe_decode64(default_cert['data']), default_cert['password'].to_s)
+      end
     else
       GenerateCertificate.load_pkcs(cert_data)
     end
@@ -107,11 +118,43 @@ module Accounts
     end.presence
   end
 
-  def can_send_emails?(_account)
+  def load_trusted_certs(account)
+    cert_data =
+      if Docuseal.multitenant?
+        value = EncryptedConfig.find_by(account:, key: EncryptedConfig::ESIGN_CERTS_KEY)&.value || {}
+
+        Docuseal::CERTS.merge(value)
+      elsif Docuseal::CERTS.present?
+        Docuseal::CERTS
+      else
+        EncryptedConfig.find_by(key: EncryptedConfig::ESIGN_CERTS_KEY)&.value || {}
+      end
+
+    default_pkcs = GenerateCertificate.load_pkcs(cert_data)
+
+    custom_certs = cert_data.fetch('custom', []).filter_map do |e|
+      next if e['data'].blank?
+
+      OpenSSL::PKCS12.new(Base64.urlsafe_decode64(e['data']), e['password'].to_s)
+    end
+
+    [default_pkcs.certificate,
+     *default_pkcs.ca_certs,
+     *custom_certs.map(&:certificate),
+     *custom_certs.flat_map(&:ca_certs).compact,
+     *Docuseal.trusted_certs]
+  end
+
+  def can_send_emails?(_account, **_params)
     return true if Docuseal.multitenant?
+    return true if Rails.env.development?
     return true if ENV['SMTP_ADDRESS'].present?
 
     EncryptedConfig.exists?(key: EncryptedConfig::EMAIL_SMTP_KEY)
+  end
+
+  def can_send_invitation_emails?(_account)
+    true
   end
 
   def normalize_timezone(timezone)
@@ -120,5 +163,12 @@ module Accounts
     ::ActiveSupport::TimeZone.all.find { |e| e.tzinfo == tzinfo }&.name || timezone
   rescue TZInfo::InvalidTimezoneIdentifier
     'UTC'
+  end
+
+  def link_expires_at(account)
+    return if AccountConfig.find_or_initialize_by(account: account,
+                                                  key: AccountConfig::DOWNLOAD_LINKS_EXPIRE_KEY).value == false
+
+    LINK_EXPIRES_AT.from_now
   end
 end

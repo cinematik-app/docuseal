@@ -3,22 +3,30 @@
 class EmailSmtpSettingsController < ApplicationController
   before_action :load_encrypted_config
   authorize_resource :encrypted_config, only: :index
-  authorize_resource :encrypted_config, parent: false, only: :create
+  authorize_resource :encrypted_config, parent: false, only: %i[create destroy]
 
   def index; end
 
   def create
     if @encrypted_config.update(email_configs)
-      SettingsMailer.smtp_successful_setup(@encrypted_config.value['from_email']).deliver_now!
+      unless Docuseal.multitenant?
+        SettingsMailer.smtp_successful_setup(@encrypted_config.value['from_email'] || current_user.email).deliver_now!
+      end
 
-      redirect_to settings_email_index_path, notice: 'Changes have been saved'
+      redirect_to settings_email_index_path, notice: I18n.t('changes_have_been_saved')
     else
-      render :index, status: :unprocessable_entity
+      render :index, status: :unprocessable_content
     end
   rescue StandardError => e
     flash[:alert] = e.message
 
-    render :index, status: :unprocessable_entity
+    render :index, status: :unprocessable_content
+  end
+
+  def destroy
+    @encrypted_config.destroy!
+
+    redirect_to settings_email_index_path, notice: I18n.t('smtp_settings_have_been_reset')
   end
 
   private

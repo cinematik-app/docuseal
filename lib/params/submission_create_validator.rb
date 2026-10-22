@@ -22,14 +22,13 @@ module Params
       required(params, %i[emails email])
 
       type(params, :emails, String)
+      email_format(params, :emails, message: 'emails are invalid')
       boolean(params, :send_email)
       type(params, :message, Hash)
 
       in_path(params, :message) do |message_params|
         type(message_params, :subject, String)
         type(message_params, :body, String)
-
-        required(message_params, :body)
       end
     end
 
@@ -42,14 +41,16 @@ module Params
       type(params, :order, String)
       type(params, :completed_redirect_url, String)
       type(params, :bcc_completed, String)
+      type(params, :reply_to, String)
+      email_format(params, :bcc_completed, message: 'bcc_completed email is invalid')
+      email_format(params, :reply_to, message: 'reply_to email is invalid')
       type(params, :message, Hash)
+      type(params, :variables, Hash)
       type(params, :submitters, Array)
 
-      in_path(params, :message) do |message_params|
+      in_path(params, :message, skip_blank: true) do |message_params|
         type(message_params, :subject, String)
         type(message_params, :body, String)
-
-        required(message_params, :body)
       end
 
       value_in(params, :order, %w[preserved random], allow_nil: true)
@@ -57,6 +58,7 @@ module Params
       if params[:submitters].present?
         in_path(params, :submitters) do |submitters_params|
           type(submitters_params, 0, Hash)
+          unique_value(submitters_params, :role)
         end
       end
 
@@ -66,11 +68,18 @@ module Params
     end
 
     def validate_submitter(submitter_params)
-      required(submitter_params, %i[email phone name])
+      if submitter_params['invite_by'].present?
+        required(submitter_params, :role)
+      else
+        required(submitter_params, %i[email phone name])
+      end
 
       type(submitter_params, :name, String)
+      type(submitter_params, :reply_to, String)
       type(submitter_params, :email, String)
-      format(submitter_params, :email, /@/, message: 'email is invalid')
+      type(submitter_params, :order, Integer)
+      email_format(submitter_params, :email, message: 'email is invalid')
+      email_format(submitter_params, :reply_to, message: 'reply_to email is invalid')
       type(submitter_params, :phone, String)
       format(submitter_params, :phone, /\A\+\d+\z/,
              message: 'phone should start with +<country code> and contain only digits')
@@ -82,7 +91,7 @@ module Params
       type(submitter_params, :fields, Array)
 
       in_path_each(submitter_params, :fields) do |field_params|
-        required(field_params, :name)
+        required(field_params, %i[name uuid])
 
         type(field_params, :name, String)
         type(field_params, :validation_pattern, String)
@@ -100,13 +109,12 @@ module Params
       type(params, :order, String)
       type(params, :completed_redirect_url, String)
       type(params, :bcc_completed, String)
+      email_format(params, :bcc_completed, message: 'bcc_completed email is invalid')
       type(params, :message, Hash)
 
       in_path(params, :message) do |message_params|
         type(message_params, :subject, String)
         type(message_params, :body, String)
-
-        required(message_params, :body)
       end
 
       value_in(params, :order, %w[preserved random], allow_nil: true)

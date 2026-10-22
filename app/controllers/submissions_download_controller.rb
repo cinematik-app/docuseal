@@ -1,23 +1,25 @@
 # frozen_string_literal: true
 
 class SubmissionsDownloadController < ApplicationController
-  skip_before_action :authenticate_user!
-  skip_authorization_check
+  load_and_authorize_resource :submission
 
   def index
-    submitter = Submitter.find_by(slug: params[:submitter_slug])
+    last_submitter = @submission.submitters.where.not(completed_at: nil).order(:completed_at).last
 
-    Submissions::EnsureResultGenerated.call(submitter)
-
-    last_submitter = submitter.submission.submitters.where.not(completed_at: nil).order(:completed_at).last
+    return head :not_found unless last_submitter
 
     Submissions::EnsureResultGenerated.call(last_submitter)
 
-    urls =
-      Submitters.select_attachments_for_download(last_submitter).map do |attachment|
-        helpers.rails_blob_url(attachment)
-      end
+    if params[:combined] == 'true'
+      url = Submitters.build_combined_url(last_submitter)
 
-    render json: urls
+      if url
+        render json: [url]
+      else
+        head :not_found
+      end
+    else
+      render json: Submitters.build_document_urls(last_submitter)
+    end
   end
 end

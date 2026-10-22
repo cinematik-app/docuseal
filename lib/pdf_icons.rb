@@ -20,6 +20,10 @@ module PdfIcons
     StringIO.new(logo_data)
   end
 
+  def stamp_logo_io
+    StringIO.new(stamp_logo_data)
+  end
+
   def check_data
     @check_data ||= PATH.join('check.png').read
   end
@@ -30,5 +34,9 @@ module PdfIcons
 
   def logo_data
     @logo_data ||= PATH.join('logo.png').read
+  end
+
+  def stamp_logo_data
+    @stamp_logo_data ||= PATH.join('stamp-logo.png').read
   end
 end

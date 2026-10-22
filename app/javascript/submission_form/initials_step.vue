@@ -1,74 +1,136 @@
 <template>
   <div dir="auto">
-    <div class="flex justify-between items-center w-full mb-2">
+    <div
+      class="flex justify-between items-end w-full mb-3.5 md:mb-4"
+      :class="{ 'mb-2': !field.description }"
+    >
       <label
-        class="label text-2xl"
-      >{{ showFieldNames && field.name ? field.name : t('initials') }}</label>
-      <div class="space-x-2 flex">
+        v-if="showFieldNames"
+        class="label text-xl sm:text-2xl py-0 field-name-label"
+      >
+        <MarkdownContent
+          v-if="field.title"
+          :string="field.title"
+        />
+        <template v-else>
+          {{ field.name || t('initials') }}
+        </template>
+      </label>
+      <div class="space-x-2 flex flex-none">
         <span
           v-if="isDrawInitials"
-          class="tooltip"
-          :data-tip="t('type_initials')"
+          class="md:tooltip"
+          :data-tip="t('type_initial')"
         >
-          <a
+          <button
             id="type_text_button"
-            href="#"
-            class="btn btn-outline font-medium btn-sm"
-            @click.prevent="toggleTextInput"
+            type="button"
+            :aria-label="t('type_initial')"
+            class="btn btn-outline font-medium btn-sm type-text-button"
+            @click="toggleTextInput"
           >
-            <IconTextSize :width="16" />
+            <IconTextSize
+              :width="16"
+              aria-hidden="true"
+            />
             <span class="hidden sm:inline">
               {{ t('type') }}
             </span>
-          </a>
+          </button>
         </span>
         <span
           v-else
-          class="tooltip ml-2"
+          class="md:tooltip ml-2"
           :data-tip="t('draw_initials')"
         >
-          <a
+          <button
             id="type_text_button"
-            href="#"
-            class="btn btn-outline font-medium btn-sm"
-            @click.prevent="toggleTextInput"
+            type="button"
+            :aria-label="t('draw_initials')"
+            class="btn btn-outline font-medium btn-sm type-text-button"
+            @click="toggleTextInput"
           >
-            <IconSignature :width="16" />
+            <IconSignature
+              :width="16"
+              aria-hidden="true"
+            />
             <span class="hidden sm:inline">
               {{ t('draw') }}
             </span>
-          </a>
+          </button>
         </span>
-        <a
-          v-if="modelValue || computedPreviousValue"
-          href="#"
-          class="btn font-medium btn-outline btn-sm"
-          @click.prevent="remove"
+        <span
+          class="md:tooltip"
+          :data-tip="t('click_to_upload')"
         >
-          <IconReload :width="16" />
+          <button
+            type="button"
+            :aria-label="t('click_to_upload')"
+            class="btn btn-outline btn-sm font-medium inline-flex flex-nowrap upload-image-button"
+            @click="$refs.uploadInput.click()"
+          >
+            <IconUpload
+              :width="16"
+              aria-hidden="true"
+            />
+            <input
+              :key="uploadImageInputKey"
+              ref="uploadInput"
+              type="file"
+              hidden
+              accept="image/*"
+              @change="drawImage"
+            >
+            <span class="hidden sm:inline">
+              {{ t('upload') }}
+            </span>
+          </button>
+        </span>
+        <button
+          v-if="modelValue || computedPreviousValue || computedPrefillData"
+          type="button"
+          class="btn font-medium btn-outline btn-sm clear-canvas-button"
+          @click="remove"
+        >
+          <IconReload
+            :width="16"
+            aria-hidden="true"
+          />
           {{ t('clear') }}
-        </a>
-        <a
+        </button>
+        <button
           v-else
-          href="#"
-          class="btn font-medium btn-outline btn-sm"
-          @click.prevent="clear"
+          type="button"
+          class="btn font-medium btn-outline btn-sm clear-canvas-button"
+          @click="clear"
         >
-          <IconReload :width="16" />
+          <IconReload
+            :width="16"
+            aria-hidden="true"
+          />
           {{ t('clear') }}
-        </a>
-        <a
-          title="Minimize"
-          href="#"
+        </button>
+        <button
+          type="button"
+          :title="t('minimize')"
+          :aria-label="t('minimize')"
           class="py-1.5 inline md:hidden"
-          @click.prevent="$emit('minimize')"
+          @click="$emit('minimize')"
         >
           <IconArrowsDiagonalMinimize2
             :width="20"
             :height="20"
+            aria-hidden="true"
           />
-        </a>
+        </button>
       </div>
+    </div>
+    <div
+      v-if="field.description"
+      dir="auto"
+      class="mb-3 px-1 field-description-text"
+    >
+      <MarkdownContent :string="field.description" />
     </div>
     <AppearsOn :field="field" />
     <input
@@ -77,22 +139,40 @@
       :name="`values[${field.uuid}]`"
     >
     <img
-      v-if="modelValue || computedPreviousValue"
-      :src="attachmentsIndex[modelValue || computedPreviousValue].url"
-      class="mx-auto bg-white border border-base-300 rounded max-h-72"
+      v-if="modelValue || computedPreviousValue || computedPrefillData"
+      :src="previousValueUrl"
+      :alt="field.name || t('initials')"
+      class="mx-auto bg-white border border-base-300 rounded max-h-44"
     >
-    <canvas
-      v-show="!modelValue && !computedPreviousValue"
-      ref="canvas"
-      class="bg-white border border-base-300 rounded-2xl"
-    />
+    <div class="relative">
+      <div
+        v-if="!isDrawInitials"
+        class="absolute top-0 right-0 left-0 bottom-0"
+      />
+      <label
+        v-if="!isDrawInitials && !modelValue && !computedPreviousValue && !computedPrefillData"
+        for="initials_text_input"
+        class="absolute top-0 right-0 left-0 bottom-0"
+      />
+      <canvas
+        v-show="!modelValue && !computedPreviousValue && !computedPrefillData"
+        ref="canvas"
+        role="img"
+        :aria-label="t('initials_drawing_area')"
+        class="bg-white border border-base-300 rounded-2xl w-full draw-canvas"
+        @touchstart.passive="lockSwipe"
+        @touchend.passive="unlockSwipe"
+        @touchcancel.passive="unlockSwipe"
+      />
+    </div>
     <input
-      v-if="!isDrawInitials && !modelValue && !computedPreviousValue"
+      v-if="!isDrawInitials && !modelValue && !computedPreviousValue && !computedPrefillData"
       id="initials_text_input"
       ref="textInput"
       class="base-input !text-2xl w-full mt-6 text-center"
       :required="field.required && !isInitialsStarted"
-      :placeholder="`${t('type_initial_here')}...`"
+      :aria-label="field.name || t('initials')"
+      :placeholder="`${t('type_initial_here')}${field.required ? '...' : ' (' + t('optional') + ')'}`"
       type="text"
       @focus="$emit('focus')"
       @input="updateWrittenInitials"
@@ -102,24 +182,40 @@
 
 <script>
 import { cropCanvasAndExportToPNG } from './crop_canvas'
-import { IconReload, IconTextSize, IconSignature, IconArrowsDiagonalMinimize2 } from '@tabler/icons-vue'
+import { isCanvasBlocked } from './validate_signature'
+import { IconReload, IconTextSize, IconUpload, IconSignature, IconArrowsDiagonalMinimize2 } from '@tabler/icons-vue'
 import SignaturePad from 'signature_pad'
 import AppearsOn from './appears_on'
+import MarkdownContent from './markdown_content'
+import SignatureStep from './signature_step'
+
+const scale = 3
 
 export default {
   name: 'InitialsStep',
   components: {
+    IconUpload,
     AppearsOn,
     IconReload,
     IconTextSize,
     IconSignature,
+    MarkdownContent,
     IconArrowsDiagonalMinimize2
   },
-  inject: ['baseUrl', 't'],
+  inject: ['baseUrl', 'fetchOptions', 't'],
   props: {
     field: {
       type: Object,
       required: true
+    },
+    submitter: {
+      type: Object,
+      required: true
+    },
+    dryRun: {
+      type: Boolean,
+      required: false,
+      default: false
     },
     submitterSlug: {
       type: String,
@@ -130,17 +226,22 @@ export default {
       required: false,
       default: true
     },
-    isDirectUpload: {
-      type: Boolean,
-      required: true,
-      default: false
-    },
     attachmentsIndex: {
       type: Object,
       required: false,
       default: () => ({})
     },
     previousValue: {
+      type: String,
+      required: false,
+      default: ''
+    },
+    prefillData: {
+      type: Object,
+      required: false,
+      default: null
+    },
+    nativePlatform: {
       type: String,
       required: false,
       default: ''
@@ -154,45 +255,100 @@ export default {
   emits: ['attached', 'update:model-value', 'start', 'minimize', 'focus'],
   data () {
     return {
-      isInitialsStarted: !!this.previousValue,
+      isInitialsStarted: false,
       isUsePreviousValue: true,
-      isDrawInitials: false
+      isDrawInitials: false,
+      uploadImageInputKey: Math.random().toString()
     }
   },
   computed: {
     computedPreviousValue () {
-      if (this.isUsePreviousValue) {
+      if (this.isUsePreviousValue && this.field.required === true) {
         return this.previousValue
       } else {
         return null
       }
+    },
+    computedPrefillData () {
+      if (this.isUsePreviousValue && this.field.required === true && !this.previousValue && !this.modelValue) {
+        return this.prefillData
+      } else {
+        return null
+      }
+    },
+    previousValueUrl () {
+      if (this.computedPrefillData) {
+        return this.computedPrefillData.url
+      } else {
+        return this.attachmentsIndex[this.modelValue || this.computedPreviousValue].url
+      }
     }
+  },
+  created () {
+    this.isInitialsStarted = !!(this.computedPreviousValue || this.computedPrefillData)
   },
   async mounted () {
     this.$nextTick(() => {
       if (this.$refs.canvas) {
-        this.$refs.canvas.width = this.$refs.canvas.parentNode.clientWidth
-        this.$refs.canvas.height = this.$refs.canvas.parentNode.clientWidth / 5
+        this.$refs.canvas.width = this.$refs.canvas.parentNode.clientWidth * scale
+        this.$refs.canvas.height = (this.$refs.canvas.parentNode.clientWidth / 4.5) * scale
+
+        this.$refs.canvas.getContext('2d').scale(scale, scale)
       }
-
-      this.$refs.textInput?.focus()
     })
-
-    if (this.isDirectUpload) {
-      import('@rails/activestorage')
-    }
 
     if (this.$refs.canvas) {
       this.pad = new SignaturePad(this.$refs.canvas)
+
+      if (this.field.preferences?.color) {
+        this.pad.penColor = this.field.preferences.color
+      }
 
       this.pad.addEventListener('beginStroke', () => {
         this.isInitialsStarted = true
 
         this.$emit('start')
       })
+
+      this.intersectionObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            this.$refs.canvas.width = this.$refs.canvas.parentNode.clientWidth * scale
+            this.$refs.canvas.height = (this.$refs.canvas.parentNode.clientWidth / 4.5) * scale
+
+            this.$refs.canvas.getContext('2d').scale(scale, scale)
+
+            if (!this.isDrawInitials) {
+              this.$nextTick(() => {
+                if (this.$refs.textInput && this.field.required === true) {
+                  this.initTextInitial()
+                }
+              })
+            }
+
+            this.intersectionObserver?.disconnect()
+          }
+        })
+      })
+
+      this.intersectionObserver.observe(this.$refs.canvas)
     }
   },
+  beforeUnmount () {
+    this.intersectionObserver?.disconnect()
+  },
   methods: {
+    lockSwipe: SignatureStep.methods.lockSwipe,
+    unlockSwipe: SignatureStep.methods.unlockSwipe,
+    drawOnCanvas: SignatureStep.methods.drawOnCanvas,
+    drawImage (event) {
+      this.remove()
+      this.isInitialsStarted = true
+
+      this.drawOnCanvas(event.target.files[0], this.$refs.canvas)
+
+      this.uploadImageInputKey = Math.random().toString()
+    },
     remove () {
       this.$emit('update:model-value', '')
 
@@ -209,21 +365,36 @@ export default {
       }
     },
     updateWrittenInitials (e) {
-      this.isInitialsStarted = true
+      this.isInitialsStarted = !!e.target.value
 
       const canvas = this.$refs.canvas
       const context = canvas.getContext('2d')
 
       const fontFamily = 'Arial'
-      const fontSize = '44px'
+      const initialFontSize = 50
       const fontStyle = 'italic'
       const fontWeight = ''
 
-      context.font = fontStyle + ' ' + fontWeight + ' ' + fontSize + ' ' + fontFamily
-      context.textAlign = 'center'
+      const setFontSize = (size) => {
+        context.font = `${fontStyle} ${fontWeight} ${size}px ${fontFamily}`
+      }
 
-      context.clearRect(0, 0, canvas.width, canvas.height)
-      context.fillText(e.target.value, canvas.width / 2, canvas.height / 2 + 11)
+      const adjustFontSizeToFit = (text, maxWidth, initialSize) => {
+        let size = initialSize
+
+        setFontSize(size)
+
+        while (context.measureText(text).width > maxWidth && size > 1) {
+          size -= 1
+          setFontSize(size)
+        }
+      }
+
+      adjustFontSizeToFit(e.target.value, canvas.width / scale, initialFontSize)
+
+      context.textAlign = 'center'
+      context.clearRect(0, 0, canvas.width / scale, canvas.height / scale)
+      context.fillText(e.target.value, canvas.width / 2 / scale, canvas.height / 2 / scale + 11)
     },
     toggleTextInput () {
       this.remove()
@@ -232,13 +403,71 @@ export default {
 
       if (!this.isDrawInitials) {
         this.$nextTick(() => {
-          this.$refs.textInput.focus()
+          if (this.$refs.textInput) {
+            if (!this.submitter.name) {
+              this.$refs.textInput.focus()
+            }
 
-          this.$emit('start')
+            this.initTextInitial()
+
+            this.$emit('start')
+          }
         })
       }
     },
+    initTextInitial () {
+      if (this.submitter.name) {
+        const parts = this.submitter.name.trim().split(/\s+/)
+
+        this.$refs.textInput.value = (parts.length > 1 ? [parts[0], parts[parts.length - 1]] : parts).map((part) => part[0]?.toUpperCase() || '').join('')
+      }
+
+      if (this.$refs.textInput.value) {
+        this.updateWrittenInitials({ target: this.$refs.textInput })
+      }
+    },
+    submitPrefillAttachment () {
+      if (this.dryRun) {
+        const attachment = { uuid: Math.random().toString(), url: this.prefillData.url }
+
+        this.$emit('attached', attachment)
+        this.$emit('update:model-value', attachment.uuid)
+
+        return Promise.resolve(attachment)
+      }
+
+      const formData = new FormData()
+
+      formData.append('prefill_token', this.prefillData.token)
+
+      return fetch(this.baseUrl + `/s/${this.submitterSlug}/prefill_attachments`, {
+        method: 'POST',
+        headers: { ...this.fetchOptions.headers },
+        body: formData
+      }).then(async (resp) => {
+        if (!resp.ok) {
+          const data = await resp.json()
+
+          return Promise.reject(new Error(data.error))
+        }
+
+        const attachment = await resp.json()
+
+        this.$emit('attached', attachment)
+        this.$emit('update:model-value', attachment.uuid)
+
+        return attachment
+      }).catch((error) => {
+        this.remove()
+
+        return Promise.reject(error)
+      })
+    },
     async submit () {
+      if (this.computedPrefillData) {
+        return this.submitPrefillAttachment()
+      }
+
       if (this.modelValue || this.computedPreviousValue) {
         if (this.computedPreviousValue) {
           this.$emit('update:model-value', this.computedPreviousValue)
@@ -247,48 +476,75 @@ export default {
         return Promise.resolve({})
       }
 
-      return new Promise((resolve) => {
-        cropCanvasAndExportToPNG(this.$refs.canvas).then(async (blob) => {
+      return new Promise((resolve, reject) => {
+        cropCanvasAndExportToPNG(this.$refs.canvas, { errorOnTooSmall: true }).then(async (blob) => {
           const file = new File([blob], 'initials.png', { type: 'image/png' })
 
-          if (this.isDirectUpload) {
-            const { DirectUpload } = await import('@rails/activestorage')
+          if (this.dryRun) {
+            const reader = new FileReader()
 
-            new DirectUpload(
-              file,
-              '/direct_uploads'
-            ).create((_error, data) => {
-              fetch(this.baseUrl + '/api/attachments', {
-                method: 'POST',
-                body: JSON.stringify({
-                  submitter_slug: this.submitterSlug,
-                  blob_signed_id: data.signed_id,
-                  name: 'attachments'
-                }),
-                headers: { 'Content-Type': 'application/json' }
-              }).then((resp) => resp.json()).then((attachment) => {
-                this.$emit('update:model-value', attachment.uuid)
-                this.$emit('attached', attachment)
+            reader.readAsDataURL(file)
 
-                return resolve(attachment)
-              })
-            })
+            reader.onloadend = () => {
+              const attachment = { url: reader.result, uuid: Math.random().toString() }
+
+              this.$emit('attached', attachment)
+              this.$emit('update:model-value', attachment.uuid)
+
+              resolve(attachment)
+            }
           } else {
             const formData = new FormData()
 
             formData.append('file', file)
             formData.append('submitter_slug', this.submitterSlug)
             formData.append('name', 'attachments')
+            formData.append('type', 'initials')
 
-            return fetch(this.baseUrl + '/api/attachments', {
+            return fetch(this.baseUrl + `/s/${this.submitterSlug}/upload`, {
               method: 'POST',
+              headers: { ...this.fetchOptions.headers },
               body: formData
-            }).then((resp) => resp.json()).then((attachment) => {
+            }).then((resp) => {
+              if (resp.status === 404) {
+                return fetch(this.baseUrl + '/api/attachments', {
+                  method: 'POST',
+                  headers: { ...this.fetchOptions.headers },
+                  body: formData
+                })
+              } else {
+                return resp
+              }
+            }).then(async (resp) => {
+              if (resp.status === 422 || resp.status === 500) {
+                const data = await resp.json()
+
+                return Promise.reject(new Error(data.error))
+              }
+
+              const attachment = await resp.json()
+
               this.$emit('attached', attachment)
               this.$emit('update:model-value', attachment.uuid)
 
               return resolve(attachment)
             })
+          }
+        }).catch((error) => {
+          if (this.field.required === true) {
+            if (isCanvasBlocked()) {
+              alert(this.t('browser_privacy_settings_block_canvas'))
+
+              if (window.Rollbar) {
+                window.Rollbar.info('Canvas blocked')
+              }
+            } else {
+              alert(this.t('signature_is_too_small_or_simple_please_redraw'))
+            }
+
+            return reject(error)
+          } else {
+            return resolve({})
           }
         })
       })

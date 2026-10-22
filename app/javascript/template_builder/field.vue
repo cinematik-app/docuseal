@@ -1,9 +1,10 @@
 <template>
   <div
-    class="group pb-2"
+    class="list-field group"
+    :class="`list-field-${field.type}`"
   >
     <div
-      class="border border-base-300 rounded rounded-tr-none relative group"
+      class="border border-base-300 rounded relative group fields-list-item"
       :style="{ backgroundColor: backgroundColor }"
     >
       <div class="flex items-center justify-between relative group/contenteditable-container">
@@ -16,17 +17,20 @@
             v-model="field.type"
             :editable="editable && !defaultField"
             :button-width="20"
-            @update:model-value="[maybeUpdateOptions(), save()]"
-            @click="scrollToFirstArea"
+            :menu-classes="'mt-1.5'"
+            :menu-style="{ backgroundColor: dropdownBgColor }"
+            @update:model-value="[maybeUpdateOptions(), $emit('save')]"
+            @click="scrollOnEdit && scrollToFirstArea()"
           />
           <Contenteditable
             ref="name"
-            :model-value="field.name || defaultName"
-            :editable="editable && !defaultField"
+            :model-value="(defaultField ? (defaultField.title || field.title || field.name) : field.name) || defaultName"
+            :editable="editable && !defaultField && field.type != 'heading'"
             :icon-inline="true"
             :icon-width="18"
             :icon-stroke-width="1.6"
-            @focus="[onNameFocus(), scrollToFirstArea()]"
+            :contenteditable-classes="isMobile ? 'py-2 -my-2' : ''"
+            @focus="[onNameFocus(), scrollOnEdit && scrollToFirstArea()]"
             @blur="onNameBlur"
           />
         </div>
@@ -55,9 +59,10 @@
           class="flex items-center space-x-1"
         >
           <button
-            v-if="field && !field.areas.length"
-            title="Draw"
-            class="relative cursor-pointer text-transparent group-hover:text-base-content"
+            v-if="field && !field.areas?.length"
+            :title="t('draw')"
+            class="relative cursor-pointer"
+            :class="iconColorClass"
             @click="$emit('set-draw', { field })"
           >
             <IconNewSection
@@ -65,22 +70,109 @@
               :stroke-width="1.6"
             />
           </button>
+          <button
+            v-if="field.preferences?.formula"
+            class="relative cursor-pointer"
+            :class="iconColorClass"
+            :title="t('formula')"
+            @click="openFormulaModal"
+          >
+            <IconMathFunction
+              :width="18"
+              :stroke-width="1.6"
+            />
+          </button>
+          <button
+            v-if="field.conditions?.length"
+            class="relative cursor-pointer"
+            :class="iconColorClass"
+            :title="t('condition')"
+            @click="openConditionsModal"
+          >
+            <IconRouteAltLeft
+              :width="18"
+              :stroke-width="1.6"
+            />
+          </button>
           <PaymentSettings
             v-if="field.type === 'payment'"
             :field="field"
-          />
+            :background-color="dropdownBgColor"
+            :with-custom-fields="withCustomFields"
+            @click-condition="openConditionsModal"
+            @click-description="openDescriptionModal"
+            @add-custom-field="$emit('add-custom-field', $event)"
+            @click-formula="openFormulaModal"
+            @save="$emit('save')"
+          >
+            <template
+              v-if="isMobile"
+              #default
+            >
+              <label
+                tabindex="0"
+                :title="t('settings')"
+                class="cursor-pointer flex items-center pr-0.5 py-2 -my-2 pl-2 -ml-2"
+                :class="iconColorClass"
+                @touchstart="onHandleTouchstart"
+                @touchmove="onHandleTouchmove"
+                @touchend="onHandleTouchend"
+                @touchcancel="onHandleTouchend"
+                @mousedown="dropdownWasOpen = $event.currentTarget.parentElement.contains($event.currentTarget.getRootNode().activeElement)"
+                @click="dropdownWasOpen && closeDropdown()"
+              >
+                <IconDotsVertical
+                  :width="18"
+                  :height="18"
+                  :stroke-width="1.6"
+                />
+              </label>
+            </template>
+            <template #menu>
+              <li
+                v-if="isMobile"
+                class="field-settings-remove"
+              >
+                <a
+                  href="#"
+                  class="text-sm py-1 px-2 text-red-600"
+                  @click.prevent="$emit('remove', field)"
+                >
+                  <IconTrashX
+                    :width="20"
+                    :stroke-width="1.6"
+                  />
+                  {{ t('remove') }}
+                </a>
+              </li>
+            </template>
+          </PaymentSettings>
           <span
             v-else
-            class="dropdown dropdown-end"
+            class="dropdown dropdown-end field-settings-dropdown"
             @mouseenter="renderDropdown = true"
             @touchstart="renderDropdown = true"
           >
             <label
               tabindex="0"
-              title="Settings"
-              class="cursor-pointer text-transparent group-hover:text-base-content"
+              :title="t('settings')"
+              class="cursor-pointer flex items-center"
+              :class="[iconColorClass, { 'pr-0.5 py-2 -my-2 pl-2 -ml-2': isMobile }]"
+              @touchstart="onHandleTouchstart"
+              @touchmove="onHandleTouchmove"
+              @touchend="onHandleTouchend"
+              @touchcancel="onHandleTouchend"
+              @mousedown="dropdownWasOpen = $event.currentTarget.parentElement.contains($event.currentTarget.getRootNode().activeElement)"
+              @click="dropdownWasOpen && closeDropdown()"
             >
+              <IconDotsVertical
+                v-if="isMobile"
+                :width="18"
+                :height="18"
+                :stroke-width="1.6"
+              />
               <IconSettings
+                v-else
                 :width="18"
                 :stroke-width="1.6"
               />
@@ -88,136 +180,53 @@
             <ul
               v-if="renderDropdown"
               tabindex="0"
-              class="mt-1.5 dropdown-content menu menu-xs p-2 shadow bg-base-100 rounded-box w-52 z-10"
+              class="mt-1.5 dropdown-content menu menu-xs p-2 shadow rounded-box w-52 z-10"
+              :style="{ backgroundColor: dropdownBgColor }"
               draggable="true"
               @dragstart.prevent.stop
               @click="closeDropdown"
             >
-              <div
-                v-if="field.type === 'text' && !defaultField"
-                class="py-1.5 px-1 relative"
-                @click.stop
-              >
-                <input
-                  v-model="field.default_value"
-                  type="text"
-                  :placeholder="t('default_value')"
-                  dir="auto"
-                  class="input input-bordered input-xs w-full max-w-xs h-7 !outline-0"
-                  @blur="save"
-                >
-                <label
-                  v-if="field.default_value"
-                  :style="{ backgroundColor: backgroundColor }"
-                  class="absolute -top-1 left-2.5 px-1 h-4"
-                  style="font-size: 8px"
-                >
-                  {{ t('default_value') }}
-                </label>
-              </div>
-              <div
-                v-if="field.type === 'date'"
-                class="py-1.5 px-1 relative"
-                @click.stop
-              >
-                <select
-                  v-model="field.preferences.format"
-                  :placeholder="t('format')"
-                  class="select select-bordered select-xs font-normal w-full max-w-xs !h-7 !outline-0"
-                  @change="save"
-                >
-                  <option
-                    v-for="format in dateFormats"
-                    :key="format"
-                    :value="format"
-                  >
-                    {{ formatDate(new Date(), format) }}
-                  </option>
-                </select>
-                <label
-                  :style="{ backgroundColor: backgroundColor }"
-                  class="absolute -top-1 left-2.5 px-1 h-4"
-                  style="font-size: 8px"
-                >
-                  {{ t('format') }}
-                </label>
-              </div>
+              <FieldSettings
+                :field="field"
+                :default-field="defaultField"
+                :editable="editable"
+                :with-signature-id="withSignatureId"
+                :with-prefillable="withPrefillable"
+                :background-color="dropdownBgColor"
+                :with-custom-fields="withCustomFields"
+                @click-formula="openFormulaModal"
+                @click-font="openFontModal"
+                @click-description="openDescriptionModal"
+                @click-condition="openConditionsModal"
+                @set-draw="$emit('set-draw', $event)"
+                @add-custom-field="$emit('add-custom-field', $event)"
+                @remove-area="removeArea"
+                @save="$emit('save')"
+                @scroll-to="$emit('scroll-to', $event)"
+              />
               <li
-                v-if="field.type != 'phone'"
-                @click.stop
-              >
-                <label class="cursor-pointer py-1.5">
-                  <input
-                    v-model="field.required"
-                    type="checkbox"
-                    class="toggle toggle-xs"
-                    @update:model-value="save"
-                  >
-                  <span class="label-text">{{ t('required') }}</span>
-                </label>
-              </li>
-              <li
-                v-if="field.type === 'text' && !defaultField"
-                @click.stop
-              >
-                <label class="cursor-pointer py-1.5">
-                  <input
-                    v-model="field.readonly"
-                    type="checkbox"
-                    class="toggle toggle-xs"
-                    @update:model-value="save"
-                  >
-                  <span class="label-text">{{ t('read_only') }}</span>
-                </label>
-              </li>
-              <hr class="pb-0.5 mt-0.5">
-              <li
-                v-for="(area, index) in field.areas || []"
-                :key="index"
+                v-if="isMobile"
+                class="field-settings-remove"
               >
                 <a
                   href="#"
-                  class="text-sm py-1 px-2"
-                  @click.prevent="$emit('scroll-to', area)"
+                  class="text-sm py-1 px-2 text-red-600"
+                  @click.prevent="$emit('remove', field)"
                 >
-                  <IconShape
+                  <IconTrashX
                     :width="20"
                     :stroke-width="1.6"
                   />
-                  {{ t('page') }} {{ area.page + 1 }}
-                </a>
-              </li>
-              <li v-if="!field.areas?.length || !['radio', 'multiple'].includes(field.type)">
-                <a
-                  href="#"
-                  class="text-sm py-1 px-2"
-                  @click.prevent="$emit('set-draw', { field })"
-                >
-                  <IconNewSection
-                    :width="20"
-                    :stroke-width="1.6"
-                  />
-                  {{ t('draw_new_area') }}
-                </a>
-              </li>
-              <li v-if="field.areas?.length === 1 && ['date', 'signature', 'initials', 'text', 'cells'].includes(field.type)">
-                <a
-                  href="#"
-                  class="text-sm py-1 px-2"
-                  @click.prevent="copyToAllPages(field)"
-                >
-                  <IconCopy
-                    :width="20"
-                    :stroke-width="1.6"
-                  />
-                  {{ t('copy_to_all_pages') }}
+                  {{ t('remove') }}
                 </a>
               </li>
             </ul>
           </span>
           <button
-            class="relative text-transparent group-hover:text-base-content pr-1"
-            title="Remove"
+            v-if="!isMobile"
+            class="relative pr-1 field-remove-button"
+            :class="iconColorClass"
+            :title="t('remove')"
             @click="$emit('remove', field)"
           >
             <IconTrashX
@@ -228,22 +237,31 @@
         </div>
       </div>
       <div
-        v-if="field.options"
+        v-if="field.options && withOptions && (isExpandOptions || field.options.length < 5)"
         ref="options"
         class="border-t border-base-300 mx-2 pt-2 space-y-1.5"
         draggable="true"
+        @dragover="onOptionDragover"
+        @drop="reorderOptions"
         @dragstart.prevent.stop
       >
         <div
           v-for="(option, index) in field.options"
           :key="option.uuid"
           class="flex space-x-1.5 items-center"
+          :data-option-uuid="option.uuid"
         >
-          <span class="text-sm w-3.5">
+          <span
+            class="text-sm w-3.5 cursor-grab select-none"
+            :draggable="editable && !defaultField"
+            @dragstart.stop="onOptionDragstart($event, option)"
+            @dragend.stop="optionDragRef = null"
+            @dragover.prevent.stop="onOptionDragover"
+          >
             {{ index + 1 }}.
           </span>
           <div
-            v-if="['radio', 'multiple'].includes(field.type) && (index > 0 || field.areas.find((a) => a.option_uuid) || !field.areas.length) && !field.areas.find((a) => a.option_uuid === option.uuid)"
+            v-if="editable && ['radio', 'multiple'].includes(field.type) && (index > 0 || field.areas.find((a) => a.option_uuid) || !field.areas.length) && !field.areas.find((a) => a.option_uuid === option.uuid)"
             class="items-center flex w-full"
           >
             <input
@@ -253,10 +271,12 @@
               dir="auto"
               required
               :placeholder="`${t('option')} ${index + 1}`"
-              @blur="save"
+              @keydown.enter="option.value ? addOptionAt(index + 1) : null"
+              @blur="$emit('save')"
+              @paste="onOptionPaste($event, index)"
             >
             <button
-              title="Draw"
+              :title="t('draw')"
               tabindex="-1"
               @click.prevent="$emit('set-draw', { field, option })"
             >
@@ -272,12 +292,16 @@
             class="w-full input input-primary input-xs text-sm bg-transparent"
             :placeholder="`${t('option')} ${index + 1}`"
             type="text"
+            :readonly="!editable || defaultField"
             required
             dir="auto"
+            @keydown.enter="option.value ? addOptionAt(index + 1) : null"
             @focus="maybeFocusOnOptionArea(option)"
-            @blur="save"
+            @blur="$emit('save')"
+            @paste="onOptionPaste($event, index)"
           >
           <button
+            v-if="editable && !defaultField"
             class="text-sm w-3.5"
             tabindex="-1"
             @click="removeOption(option)"
@@ -285,15 +309,88 @@
             &times;
           </button>
         </div>
+        <div
+          v-if="field.options && (!editable || defaultField)"
+          class="pb-1"
+        />
         <button
-          v-if="field.options"
-          class="text-center text-sm w-full pb-1"
-          @click="addOption"
+          v-else-if="field.options && editable && !defaultField"
+          class="field-add-option text-center text-sm w-full pb-1"
+          @click="addOptionAt(field.options.length)"
         >
           + {{ t('add_option') }}
         </button>
       </div>
+      <div
+        v-else-if="field.options && withOptions && !isExpandOptions && field.options.length > 4"
+        class="border-t border-base-300 mx-2 space-y-1.5"
+      >
+        <button
+          class="field-expand-options text-center text-sm w-full py-1 flex space-x-0.5 justify-center items-center"
+          @click="isExpandOptions = true"
+        >
+          <span class="lowercase">
+            {{ field.options.length }} {{ t('options') }}
+          </span>
+          <IconChevronDown
+            class="ml-2 mr-2 mt-0.5"
+            width="15"
+            height="15"
+          />
+        </button>
+      </div>
     </div>
+    <Teleport
+      v-if="isShowFormulaModal"
+      :to="modalContainerEl"
+    >
+      <FormulaModal
+        :field="field"
+        :editable="editable && !defaultField"
+        :default-field="defaultField"
+        :build-default-name="buildDefaultName"
+        @save="$emit('save')"
+        @close="isShowFormulaModal = false"
+      />
+    </Teleport>
+    <Teleport
+      v-if="isShowFontModal"
+      :to="modalContainerEl"
+    >
+      <FontModal
+        :field="field"
+        :editable="editable && !defaultField"
+        :default-field="defaultField"
+        :build-default-name="buildDefaultName"
+        @save="$emit('save')"
+        @close="isShowFontModal = false"
+      />
+    </Teleport>
+    <Teleport
+      v-if="isShowConditionsModal"
+      :to="modalContainerEl"
+    >
+      <ConditionsModal
+        :item="field"
+        :default-field="defaultField"
+        :build-default-name="buildDefaultName"
+        @save="$emit('save')"
+        @close="isShowConditionsModal = false"
+      />
+    </Teleport>
+    <Teleport
+      v-if="isShowDescriptionModal"
+      :to="modalContainerEl"
+    >
+      <DescriptionModal
+        :field="field"
+        :editable="editable && !defaultField"
+        :default-field="defaultField"
+        :build-default-name="buildDefaultName"
+        @save="$emit('save')"
+        @close="isShowDescriptionModal = false"
+      />
+    </Teleport>
   </div>
 </template>
 
@@ -301,7 +398,12 @@
 import Contenteditable from './contenteditable'
 import FieldType from './field_type'
 import PaymentSettings from './payment_settings'
-import { IconShape, IconNewSection, IconTrashX, IconCopy, IconSettings } from '@tabler/icons-vue'
+import FieldSettings from './field_settings'
+import FormulaModal from './formula_modal'
+import FontModal from './font_modal'
+import ConditionsModal from './conditions_modal'
+import DescriptionModal from './description_modal'
+import { IconRouteAltLeft, IconMathFunction, IconNewSection, IconTrashX, IconSettings, IconDotsVertical, IconChevronDown } from '@tabler/icons-vue'
 import { v4 } from 'uuid'
 
 export default {
@@ -309,18 +411,50 @@ export default {
   components: {
     Contenteditable,
     IconSettings,
-    IconShape,
+    IconDotsVertical,
+    FieldSettings,
     PaymentSettings,
+    IconChevronDown,
     IconNewSection,
+    FormulaModal,
+    FontModal,
+    DescriptionModal,
+    ConditionsModal,
+    IconRouteAltLeft,
     IconTrashX,
-    IconCopy,
+    IconMathFunction,
     FieldType
   },
-  inject: ['template', 'save', 'backgroundColor', 'selectedAreaRef', 't'],
+  inject: ['template', 'backgroundColor', 'selectedAreasRef', 't', 'locale', 'getFieldTypeIndex', 'dateFormats', 'isMobile', 'nativePlatform'],
   props: {
     field: {
       type: Object,
       required: true
+    },
+    scrollOnEdit: {
+      type: Boolean,
+      required: false,
+      default: true
+    },
+    withSignatureId: {
+      type: Boolean,
+      required: false,
+      default: null
+    },
+    withCustomFields: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
+    withPrefillable: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
+    withOptions: {
+      type: Boolean,
+      required: false,
+      default: true
     },
     defaultField: {
       type: Object,
@@ -333,46 +467,47 @@ export default {
       default: true
     }
   },
-  emits: ['set-draw', 'remove', 'scroll-to'],
+  emits: ['set-draw', 'remove', 'scroll-to', 'save', 'add-custom-field', 'touch-drag', 'touch-drag-end'],
   data () {
     return {
+      touchDrag: null,
+      dropdownWasOpen: false,
+      isExpandOptions: false,
       isNameFocus: false,
-      showPaymentModal: false,
-      renderDropdown: false
+      isShowFormulaModal: false,
+      isShowFontModal: false,
+      isShowConditionsModal: false,
+      isShowDescriptionModal: false,
+      renderDropdown: false,
+      optionDragRef: null
     }
   },
   computed: {
+    iconColorClass () {
+      return this.isMobile ? 'text-base-content' : 'text-transparent group-hover:text-base-content'
+    },
     fieldNames: FieldType.computed.fieldNames,
-    dateFormats () {
-      return [
-        'MM/DD/YYYY',
-        'DD/MM/YYYY',
-        'YYYY-MM-DD',
-        'DD-MM-YYYY',
-        'DD.MM.YYYY',
-        'MMM D, YYYY',
-        'MMMM D, YYYY',
-        'D MMM YYYY',
-        'D MMMM YYYY'
-      ]
+    fieldLabels: FieldType.computed.fieldLabels,
+    dropdownBgColor () {
+      return ['', null, 'transparent'].includes(this.backgroundColor) ? 'white' : this.backgroundColor
+    },
+    schemaAttachmentsIndexes () {
+      return (this.template.schema || []).reduce((acc, item, index) => {
+        acc[item.attachment_uuid] = index
+
+        return acc
+      }, {})
+    },
+    sortedAreas () {
+      return (this.field.areas || []).sort((a, b) => {
+        return this.schemaAttachmentsIndexes[a.attachment_uuid] - this.schemaAttachmentsIndexes[b.attachment_uuid]
+      })
+    },
+    modalContainerEl () {
+      return this.$el.getRootNode().querySelector('#docuseal_modal_container')
     },
     defaultName () {
-      if (this.field.type === 'payment' && this.field.preferences?.price) {
-        const { price, currency } = this.field.preferences || {}
-
-        const formattedPrice = new Intl.NumberFormat([], {
-          style: 'currency',
-          currency
-        }).format(price)
-
-        return `${this.fieldNames[this.field.type]} ${formattedPrice}`
-      } else {
-        const typeIndex = this.template.fields.filter((f) => f.type === this.field.type).indexOf(this.field)
-
-        const suffix = { multiple: this.t('select'), radio: this.t('group') }[this.field.type] || this.t('field')
-
-        return `${this.fieldNames[this.field.type]} ${suffix} ${typeIndex + 1}`
-      }
+      return this.buildDefaultName(this.field)
     },
     areas () {
       return this.field.areas || []
@@ -383,55 +518,94 @@ export default {
 
     if (this.field.type === 'date') {
       this.field.preferences.format ||=
-        (Intl.DateTimeFormat().resolvedOptions().locale.endsWith('-US') ? 'MM/DD/YYYY' : 'DD/MM/YYYY')
+        this.dateFormats[0] ||
+        ({ 'de-DE': 'DD.MM.YYYY' }[this.locale] || ((Intl.DateTimeFormat().resolvedOptions().locale.endsWith('-US') || new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).format(new Date()).match(/\s(?:CST|CDT|PST|PDT|EST|EDT)$/)) ? 'MM/DD/YYYY' : 'DD/MM/YYYY'))
     }
   },
   methods: {
-    formatDate (date, format) {
-      const monthFormats = {
-        M: 'numeric',
-        MM: '2-digit',
-        MMM: 'short',
-        MMMM: 'long'
-      }
+    onHandleTouchstart (e) {
+      if (!this.isMobile) return
 
-      const dayFormats = {
-        D: 'numeric',
-        DD: '2-digit'
-      }
-
-      const yearFormats = {
-        YYYY: 'numeric',
-        YY: '2-digit'
-      }
-
-      const parts = new Intl.DateTimeFormat([], {
-        day: dayFormats[format.match(/D+/)],
-        month: monthFormats[format.match(/M+/)],
-        year: yearFormats[format.match(/Y+/)]
-      }).formatToParts(date)
-
-      return format
-        .replace(/D+/, parts.find((p) => p.type === 'day').value)
-        .replace(/M+/, parts.find((p) => p.type === 'month').value)
-        .replace(/Y+/, parts.find((p) => p.type === 'year').value)
+      this.touchDrag = { startY: e.touches[0].clientY, moved: false }
     },
-    copyToAllPages (field) {
-      const areaString = JSON.stringify(field.areas[0])
+    onHandleTouchmove (e) {
+      if (!this.touchDrag) return
 
-      this.template.documents.forEach((attachment) => {
-        attachment.preview_images.forEach((page) => {
-          if (!field.areas.find((area) => area.attachment_uuid === attachment.uuid && area.page === parseInt(page.filename))) {
-            field.areas.push({ ...JSON.parse(areaString), attachment_uuid: attachment.uuid, page: parseInt(page.filename) })
-          }
-        })
-      })
+      const { clientX, clientY } = e.touches[0]
 
-      this.$nextTick(() => {
-        this.$emit('scroll-to', this.field.areas[this.field.areas.length - 1])
-      })
+      if (!this.touchDrag.moved && Math.abs(clientY - this.touchDrag.startY) < 6) return
 
-      this.save()
+      this.touchDrag.moved = true
+
+      e.preventDefault()
+
+      this.$emit('touch-drag', { field: this.field, x: clientX, y: clientY })
+    },
+    onHandleTouchend (e) {
+      if (!this.touchDrag) return
+
+      if (this.touchDrag.moved) {
+        e.preventDefault()
+
+        e.currentTarget.blur()
+
+        this.$emit('touch-drag-end')
+      }
+
+      this.touchDrag = null
+    },
+    removeArea (area) {
+      this.field.areas.splice(this.field.areas.indexOf(area), 1)
+
+      this.$emit('save')
+    },
+    openFormulaModal () {
+      if (this.nativePlatform && window.webkit?.messageHandlers?.modal) {
+        window.webkit.messageHandlers.modal.postMessage({ action: 'sheet', name: 'formula', detent: 'medium', uuid: this.field.uuid })
+      } else {
+        this.isShowFormulaModal = true
+      }
+    },
+    openFontModal () {
+      if (this.nativePlatform && window.webkit?.messageHandlers?.modal) {
+        window.webkit.messageHandlers.modal.postMessage({ action: 'sheet', name: 'font', detent: 'medium', uuid: this.field.uuid })
+      } else {
+        this.isShowFontModal = true
+      }
+    },
+    openConditionsModal () {
+      if (this.nativePlatform && window.webkit?.messageHandlers?.modal) {
+        window.webkit.messageHandlers.modal.postMessage({ action: 'sheet', name: 'conditions', detent: 'medium', uuid: this.field.uuid })
+      } else {
+        this.isShowConditionsModal = true
+      }
+    },
+    openDescriptionModal () {
+      if (this.nativePlatform && window.webkit?.messageHandlers?.modal) {
+        window.webkit.messageHandlers.modal.postMessage({ action: 'sheet', name: 'description', detent: 'medium', uuid: this.field.uuid })
+      } else {
+        this.isShowDescriptionModal = true
+      }
+    },
+    buildDefaultName (field) {
+      if (field.type === 'payment' && field.preferences?.price && !field.preferences?.formula) {
+        const { price, currency } = field.preferences || {}
+
+        const formattedPrice = new Intl.NumberFormat([], {
+          style: 'currency',
+          currency
+        }).format(price)
+
+        return `${this.fieldNames[field.type]} ${formattedPrice}`
+      } else {
+        const typeIndex = this.getFieldTypeIndex(field)
+
+        if (field.type === 'heading' || field.type === 'strikethrough') {
+          return `${this.fieldNames[field.type]} ${typeIndex + 1}`
+        } else {
+          return `${this.fieldLabels[field.type]} ${typeIndex + 1}`
+        }
+      }
     },
     onNameFocus (e) {
       this.isNameFocus = true
@@ -446,31 +620,69 @@ export default {
       const area = this.field.areas.find((a) => a.option_uuid === option.uuid)
 
       if (area) {
-        this.selectedAreaRef.value = area
+        this.selectedAreasRef.value = [area]
       }
     },
     scrollToFirstArea () {
-      return this.field.areas?.[0] && this.$emit('scroll-to', this.field.areas[0])
+      return this.sortedAreas[0] && this.$emit('scroll-to', this.sortedAreas[0])
     },
     closeDropdown () {
-      document.activeElement.blur()
+      this.$el.getRootNode().activeElement.blur()
     },
-    addOption () {
-      this.field.options.push({ value: '', uuid: v4() })
+    onOptionPaste (e, index) {
+      const text = e.clipboardData.getData('text')
+
+      if (text.includes('\n')) {
+        e.preventDefault()
+
+        this.isExpandOptions = true
+
+        const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l)
+
+        if (lines.length > 0) {
+          const currentOption = this.field.options[index]
+
+          currentOption.value = (currentOption.value + lines[0]).trim()
+
+          const newOptions = lines.slice(1).map((line) => ({ value: line, uuid: v4() }))
+
+          this.field.options.splice(index + 1, 0, ...newOptions)
+
+          this.$nextTick(() => {
+            const inputs = this.$refs.options.querySelectorAll('input')
+
+            inputs[index + newOptions.length]?.focus()
+          })
+
+          this.$emit('save')
+        }
+      }
+    },
+    addOptionAt (index) {
+      this.isExpandOptions = true
+
+      const insertAt = index ?? this.field.options.length
+
+      this.field.options.splice(insertAt, 0, { value: '', uuid: v4() })
 
       this.$nextTick(() => {
         const inputs = this.$refs.options.querySelectorAll('input')
 
-        inputs[inputs.length - 1]?.focus()
+        inputs[insertAt]?.focus()
       })
 
-      this.save()
+      this.$emit('save')
     },
     removeOption (option) {
       this.field.options.splice(this.field.options.indexOf(option), 1)
-      this.field.areas.splice(this.field.areas.findIndex((a) => a.option_uuid === option.uuid), 1)
 
-      this.save()
+      const optionIndex = this.field.areas.findIndex((a) => a.option_uuid === option.uuid)
+
+      if (optionIndex !== -1) {
+        this.field.areas.splice(this.field.areas.findIndex((a) => a.option_uuid === option.uuid), 1)
+      }
+
+      this.$emit('save')
     },
     maybeUpdateOptions () {
       delete this.field.default_value
@@ -481,6 +693,15 @@ export default {
 
       if (['radio', 'multiple', 'select'].includes(this.field.type)) {
         this.field.options ||= [{ value: '', uuid: v4() }]
+      }
+
+      if (this.field.type === 'heading') {
+        this.field.readonly = true
+      }
+
+      if (this.field.type === 'strikethrough') {
+        this.field.readonly = true
+        this.field.default_value = true
       }
 
       (this.field.areas || []).forEach((area) => {
@@ -503,12 +724,71 @@ export default {
 
       this.isNameFocus = false
 
-      this.save()
+      this.$emit('save')
     },
-    removeArea (area) {
-      this.field.areas.splice(this.field.areas.indexOf(area), 1)
+    onOptionDragstart (event, option) {
+      this.optionDragRef = option
 
-      this.save()
+      const root = this.$el.getRootNode()
+      const hiddenEl = document.createElement('div')
+
+      hiddenEl.style.width = '1px'
+      hiddenEl.style.height = '1px'
+      hiddenEl.style.opacity = '0'
+      hiddenEl.style.position = 'fixed'
+
+      root.querySelector('#docuseal_modal_container')?.appendChild(hiddenEl)
+      event.dataTransfer?.setDragImage(hiddenEl, 0, 0)
+
+      setTimeout(() => { hiddenEl.remove() }, 1000)
+
+      event.dataTransfer.effectAllowed = 'move'
+    },
+    onOptionDragover (e) {
+      if (!this.optionDragRef) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const targetRow = e.target.closest('[data-option-uuid]')
+
+      if (!targetRow) return
+
+      const dragRow = this.$refs.options?.querySelector(`[data-option-uuid="${this.optionDragRef.uuid}"]`)
+
+      if (!dragRow) return
+      if (targetRow === dragRow) return
+
+      const rows = Array.from(this.$refs.options.querySelectorAll('[data-option-uuid]'))
+
+      const currentIndex = rows.indexOf(dragRow)
+      const targetIndex = rows.indexOf(targetRow)
+
+      if (currentIndex < targetIndex) {
+        targetRow.after(dragRow)
+      } else {
+        targetRow.before(dragRow)
+      }
+    },
+    reorderOptions (e) {
+      if (!this.optionDragRef) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      const rows = Array.from(this.$refs.options.querySelectorAll('[data-option-uuid]'))
+
+      const newOrder = rows
+        .map((el) => this.field.options.find((opt) => opt.uuid === el.dataset.optionUuid))
+        .filter(Boolean)
+
+      if (newOrder.length === this.field.options.length) {
+        this.field.options.splice(0, this.field.options.length, ...newOrder)
+
+        this.$emit('save')
+      }
+
+      this.optionDragRef = null
     }
   }
 }

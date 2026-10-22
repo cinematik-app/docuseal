@@ -5,6 +5,12 @@ export default targetable(class extends HTMLElement {
 
   connectedCallback () {
     this.addEventListener('click', () => this.downloadFiles())
+    this.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        this.downloadFiles()
+      }
+    })
   }
 
   toggleState () {
@@ -15,15 +21,31 @@ export default targetable(class extends HTMLElement {
   downloadFiles () {
     if (!this.dataset.src) return
 
+    const download = window.webkit?.messageHandlers?.download
+
+    if (download) {
+      this.toggleState()
+
+      document.addEventListener('native:download-end', () => this.toggleState(), { once: true })
+
+      return download.postMessage({ src: this.dataset.src })
+    }
+
     this.toggleState()
 
-    fetch(this.dataset.src).then((response) => response.json()).then((urls) => {
-      const isSafariIos = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    fetch(this.dataset.src).then(async (response) => {
+      if (response.ok) {
+        const urls = await response.json()
+        const isMobileSafariIos = 'ontouchstart' in window && navigator.maxTouchPoints > 0 && /AppleWebKit/i.test(navigator.userAgent)
+        const isSafariIos = isMobileSafariIos || /iPhone|iPad|iPod/i.test(navigator.userAgent)
 
-      if (isSafariIos && urls.length > 1) {
-        this.downloadSafariIos(urls)
+        if (isSafariIos && urls.length > 1) {
+          this.downloadSafariIos(urls)
+        } else {
+          this.downloadUrls(urls)
+        }
       } else {
-        this.downloadUrls(urls)
+        alert('Failed to download files')
       }
     })
   }
@@ -48,9 +70,9 @@ export default targetable(class extends HTMLElement {
     fileRequests.reduce(
       (prevPromise, request) => prevPromise.then(() => request()),
       Promise.resolve()
-    )
-
-    this.toggleState()
+    ).finally(() => {
+      this.toggleState()
+    })
   }
 
   downloadSafariIos (urls) {
