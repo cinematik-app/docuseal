@@ -113,13 +113,23 @@ Rails.application.configure do
   logger.formatter = config.log_formatter
   config.logger    = ActiveSupport::TaggedLogging.new(logger)
 
+  encryption_keys = lambda do |secret|
+    {
+      primary_key: secret.first(32),
+      deterministic_key: secret.last(32),
+      key_derivation_salt: Digest::SHA256.hexdigest(secret)
+    }
+  end
+
   encryption_secret = ENV['ENCRYPTION_SECRET'].presence || Digest::SHA256.hexdigest(ENV['SECRET_KEY_BASE'].to_s)
 
-  config.active_record.encryption = {
-    primary_key: encryption_secret.first(32),
-    deterministic_key: encryption_secret.last(32),
-    key_derivation_salt: Digest::SHA256.hexdigest(encryption_secret)
-  }
+  config.active_record.encryption = encryption_keys.call(encryption_secret)
+
+  # Set ENCRYPTION_SECRET_PREVIOUS only while rotating: rows still decrypt with the old secret,
+  # `rails encryption:reencrypt` rewrites them with the current one, then unset it.
+  if ENV['ENCRYPTION_SECRET_PREVIOUS'].present?
+    config.active_record.encryption[:previous] = [encryption_keys.call(ENV['ENCRYPTION_SECRET_PREVIOUS'])]
+  end
 
   ActiveRecord::Encryption.configure(**config.active_record.encryption)
 
