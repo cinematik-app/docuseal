@@ -5,12 +5,30 @@ export default targetable(class extends HTMLElement {
   static [target.static] = ['canvas', 'input', 'clear', 'button']
 
   async connectedCallback () {
-    this.canvas.width = this.canvas.parentNode.parentNode.clientWidth
-    this.canvas.height = this.canvas.parentNode.parentNode.clientWidth / 3
+    this.lockSwipe(true)
 
     const { default: SignaturePad } = await import('signature_pad')
 
+    this.setCanvasSize()
+
     this.pad = new SignaturePad(this.canvas)
+
+    this.resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(() => {
+        if (!this.canvas) return
+        if (!this.canvas.parentNode?.clientWidth) return
+
+        const { width, height } = this.canvas
+
+        this.setCanvasSize()
+
+        if (this.canvas.width !== width || this.canvas.height !== height) {
+          this.redrawCanvas(width, height)
+        }
+      })
+    })
+
+    this.resizeObserver.observe(this.canvas.parentNode)
 
     this.clear.addEventListener('click', (e) => {
       e.preventDefault()
@@ -42,5 +60,45 @@ export default targetable(class extends HTMLElement {
     }
 
     this.closest('form').requestSubmit()
+  }
+
+  disconnectedCallback () {
+    this.lockSwipe(false)
+
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect()
+    }
+  }
+
+  lockSwipe (locked) {
+    window.webkit?.messageHandlers?.native?.postMessage({ type: 'swipe', op: locked ? 'lock' : 'unlock' })
+  }
+
+  setCanvasSize () {
+    const scale = 3
+
+    const width = this.canvas.parentNode.clientWidth
+    const height = this.canvas.parentNode.clientWidth / 2.5
+
+    if (this.canvas.width !== width * scale || this.canvas.height !== height * scale) {
+      this.canvas.width = width * scale
+      this.canvas.height = height * scale
+
+      this.canvas.getContext('2d').scale(scale, scale)
+    }
+  }
+
+  redrawCanvas (oldWidth, oldHeight) {
+    if (this.pad && !this.pad.isEmpty() && oldWidth > 0 && oldHeight > 0 && this.canvas.width > 0 && this.canvas.height > 0) {
+      const sx = this.canvas.width / oldWidth
+      const sy = this.canvas.height / oldHeight
+
+      const scaledData = this.pad.toData().map((stroke) => ({
+        ...stroke,
+        points: stroke.points.map((p) => ({ ...p, x: p.x * sx, y: p.y * sy }))
+      }))
+
+      this.pad.fromData(scaledData)
+    }
   }
 })

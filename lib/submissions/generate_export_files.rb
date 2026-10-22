@@ -6,8 +6,8 @@ module Submissions
 
     module_function
 
-    def call(submissions, format: :csv)
-      rows = build_table_rows(submissions)
+    def call(submissions, format: :csv, expires_at: nil)
+      rows = build_table_rows(submissions, expires_at:)
 
       if format.to_sym == :csv
         rows_to_csv(rows)
@@ -19,28 +19,25 @@ module Submissions
     end
 
     def rows_to_xlsx(rows)
-      workbook = RubyXL::Workbook.new
-      worksheet = workbook[0]
-      worksheet.sheet_name = I18n.l(Time.current.to_date)
-
       headers = build_headers(rows)
-      headers.each_with_index do |column_name, column_index|
-        worksheet.add_cell(0, column_index, column_name)
-      end
 
-      rows.each.with_index(1) do |row, row_index|
-        extract_columns(row, headers).each_with_index do |value, column_index|
-          worksheet.add_cell(row_index, column_index, value)
+      io = StringIO.new
+
+      Xlsxtream::Workbook.open(io) do |workbook|
+        workbook.write_worksheet(Time.current.to_date.to_s) do |sheet|
+          sheet << headers.to_a
+
+          rows.each { |row| sheet << extract_columns(row, headers) }
         end
       end
 
-      workbook.stream.string
+      io.string
     end
 
     def rows_to_csv(rows)
       headers = build_headers(rows)
 
-      CSV.generate do |csv|
+      CSVSafe.generate do |csv|
         csv << headers
 
         rows.each do |row|
@@ -57,8 +54,9 @@ module Submissions
       headers.map { |key| row.find { |e| e[:name] == key }&.dig(:value) }
     end
 
-    def build_table_rows(submissions)
-      submissions.map do |submission|
+    def build_table_rows(submissions, expires_at: nil)
+      submissions.preload(submitters: [{ attachments_attachments: :blob, documents_attachments: :blob }])
+                 .find_each.map do |submission|
         submission_data = []
         submitters_count = submission.submitters.size
 
@@ -68,7 +66,7 @@ module Submissions
 
           submission_data += build_submission_data(submitter, submitter_name, submitters_count)
 
-          submission_data += submitter_formatted_fields(submitter).map do |field|
+          submission_data += submitter_formatted_fields(submitter, expires_at:).map do |field|
             {
               name: column_name(field[:name], submitter_name, submitters_count),
               value: field[:value]
@@ -79,8 +77,8 @@ module Submissions
 
           submission_data += submitter.documents.map.with_index(1) do |attachment, index|
             {
-              name: "Document #{index}",
-              value: attachment.url
+              name: "#{I18n.t('document')} #{index}",
+              value: ActiveStorage::Blob.proxy_url(attachment.blob, expires_at:)
             }
           end
         end
@@ -92,20 +90,28 @@ module Submissions
     def build_submission_data(submitter, submitter_name, submitters_count)
       [
         {
-          name: column_name('Name', submitter_name, submitters_count),
+          name: column_name(I18n.t('name'), submitter_name, submitters_count),
           value: submitter.name
         },
         {
-          name: column_name('Email', submitter_name, submitters_count),
+          name: column_name(I18n.t('email'), submitter_name, submitters_count),
           value: submitter.email
         },
         {
-          name: column_name('Phone', submitter_name, submitters_count),
+          name: column_name(I18n.t('phone'), submitter_name, submitters_count),
           value: submitter.phone
         },
         {
-          name: column_name('Completed At', submitter_name, submitters_count),
-          value: submitter.completed_at
+          name: column_name(I18n.t('status'), submitter_name, submitters_count),
+          value: submitter.status
+        },
+        {
+          name: column_name(I18n.t('completed_at'), submitter_name, submitters_count),
+          value: submitter.completed_at.to_s
+        },
+        {
+          name: column_name(I18n.t('link'), submitter_name, submitters_count),
+          value: submitter.completed_at? ? nil : r.submit_form_url(slug: submitter.slug, **Docuseal.default_url_options)
         }
       ].reject { |e| e[:value].blank? }
     end
@@ -114,7 +120,7 @@ module Submissions
       submitters_count > 1 ? "#{submitter_name} - #{name}" : name
     end
 
-    def submitter_formatted_fields(submitter)
+    def submitter_formatted_fields(submitter, expires_at: nil)
       fields = submitter.submission.template_fields || submitter.submission.template.fields
 
       template_fields = fields.select { |f| f['submitter_uuid'] == submitter.uuid }
@@ -127,19 +133,30 @@ module Submissions
         template_field_type = template_field['type']
         template_field_counters[template_field_type] += 1
         template_field_name = template_field['name'].presence
-        template_field_name ||= "#{template_field_type.titleize} Field #{template_field_counters[template_field_type]}"
+        template_field_name ||=
+          "#{I18n.t("#{template_field_type}_field")} #{template_field_counters[template_field_type]}"
 
         value =
           if template_field_type.in?(%w[image signature])
-            attachments_index[submitter_value]&.url
+            attachment = attachments_index[submitter_value]
+
+            ActiveStorage::Blob.proxy_url(attachment.blob, expires_at:) if attachment
           elsif template_field_type == 'file'
-            Array.wrap(submitter_value).compact_blank.filter_map { |e| attachments_index[e]&.url }
+            Array.wrap(submitter_value).compact_blank.filter_map do |e|
+              attachment = attachments_index[e]
+
+              ActiveStorage::Blob.proxy_url(attachment.blob, expires_at:) if attachment
+            end
           else
             submitter_value
           end
 
         { name: template_field_name, uuid: template_field['uuid'], value: }
       end
+    end
+
+    def r
+      Rails.application.routes.url_helpers
     end
   end
 end

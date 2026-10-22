@@ -5,18 +5,31 @@ class TemplatesUploadsController < ApplicationController
 
   layout 'plain'
 
-  def show; end
+  def show
+    url_uri = Addressable::URI.parse(params[:url].to_s)
+
+    redirect_to root_path if url_uri.normalized_scheme != 'https' || url_uri.host.blank?
+  end
 
   def create
     url_params = create_file_params_from_url if params[:url].present?
 
     save_template!(@template, url_params)
 
-    documents = Templates::CreateAttachments.call(@template, url_params || params)
-
+    documents, = Templates::CreateAttachments.call(@template, url_params || params, extract_fields: true)
     schema = documents.map { |doc| { attachment_uuid: doc.uuid, name: doc.filename.base } }
 
+    if @template.fields.blank?
+      @template.fields = Templates::ProcessDocument.normalize_attachment_fields(@template, documents)
+
+      schema.each { |item| item['pending_fields'] = true } if @template.fields.present?
+    end
+
     @template.update!(schema:)
+
+    WebhookUrls.enqueue_events(@template, 'template.created')
+
+    SearchEntries.enqueue_reindex(@template)
 
     redirect_to edit_template_path(@template)
   rescue Templates::CreateAttachments::PdfEncrypted
@@ -24,7 +37,9 @@ class TemplatesUploadsController < ApplicationController
   rescue StandardError => e
     Rollbar.error(e) if defined?(Rollbar)
 
-    redirect_to root_path, alert: 'Unable to upload file'
+    raise if Rails.env.local?
+
+    redirect_to root_path, alert: I18n.t('unable_to_update_file')
   end
 
   private
@@ -35,6 +50,8 @@ class TemplatesUploadsController < ApplicationController
     template.folder = TemplateFolders.find_or_create_by_name(current_user, params[:folder_name])
     template.name = File.basename((url_params || params)[:files].first.original_filename, '.*')
 
+    Templates.maybe_assign_access(template)
+
     template.save!
 
     template
@@ -43,23 +60,18 @@ class TemplatesUploadsController < ApplicationController
   def create_file_params_from_url
     tempfile = Tempfile.new
     tempfile.binmode
-    tempfile.write(conn.get(Addressable::URI.parse(params[:url]).display_uri.to_s).body)
+    tempfile.write(DownloadUtils.call(params[:url], validate: true).body)
     tempfile.rewind
+
+    filename = URI.decode_www_form_component(params[:filename]).tr('/', '-') if params[:filename].present?
+    filename ||= File.basename(URI.decode_www_form_component(params[:url]))
 
     file = ActionDispatch::Http::UploadedFile.new(
       tempfile:,
-      filename: File.basename(
-        URI.decode_www_form_component(params[:filename].presence || params[:url])
-      ),
+      filename:,
       type: Marcel::MimeType.for(tempfile)
     )
 
     { files: [file] }
-  end
-
-  def conn
-    Faraday.new do |faraday|
-      faraday.response :follow_redirects
-    end
   end
 end

@@ -3,91 +3,120 @@
 class TemplatesController < ApplicationController
   load_and_authorize_resource :template
 
-  before_action :load_base_template, only: %i[new create]
-
   def show
     submissions = @template.submissions.accessible_by(current_ability)
     submissions = submissions.active if @template.archived_at.blank?
-    submissions = Submissions.search(submissions, params[:q])
+    submissions = Submissions.search(current_user, submissions, params[:q], search_values: true)
+    submissions = Submissions::Filter.call(submissions, current_user, params.except(:status))
 
     @base_submissions = submissions
 
-    submissions = submissions.pending if params[:status] == 'pending'
-    submissions = submissions.completed if params[:status] == 'completed'
+    submissions = Submissions::Filter.filter_by_status(submissions, params)
 
-    @pagy, @submissions = pagy(submissions.preload(:submitters).order(id: :desc))
+    submissions = if params[:completed_at_from].present? || params[:completed_at_to].present?
+                    submissions.order(completed_at: :desc)
+                  else
+                    submissions.order(id: :desc)
+                  end
+
+    @pagy, @submissions =
+      pagy_auto(submissions.select_for_list.preload(:template_accesses, submitters: :start_form_submission_events))
+
+    render_infinite_scroll(@pagy, @submissions, @template) if turbo_infinite_scroll?
   rescue ActiveRecord::RecordNotFound
     redirect_to root_path
   end
 
   def new
-    @template.name = "#{@base_template.name} (Clone)" if @base_template
+    render :new, layout: 'plain'
   end
 
   def edit
-    ActiveRecord::Associations::Preloader.new(
-      records: [@template],
-      associations: [schema_documents: { preview_images_attachments: :blob }]
-    ).call
-
-    @template_data =
-      @template.as_json.merge(
-        documents: @template.schema_documents.as_json(
-          methods: [:metadata],
-          include: { preview_images: { methods: %i[url metadata filename] } }
-        )
-      ).to_json
+    @template_data = Templates.serialize_for_builder(@template)
 
     render :edit, layout: 'plain'
   end
 
   def create
-    if @base_template
-      @template = Templates::Clone.call(@base_template, author: current_user,
-                                                        name: params.dig(:template, :name),
-                                                        folder_name: params[:folder_name])
-    else
-      @template.author = current_user
-      @template.folder = TemplateFolders.find_or_create_by_name(current_user, params[:folder_name])
-    end
-
+    @template.author = current_user
+    @template.folder = TemplateFolders.find_or_create_by_name(current_user, params[:folder_name])
     @template.account = current_account
 
-    if @template.save
-      Templates::CloneAttachments.call(template: @template, original_template: @base_template) if @base_template
+    Templates.maybe_assign_access(@template)
 
-      redirect_to edit_template_path(@template)
+    if @template.save
+      SearchEntries.enqueue_reindex(@template)
+
+      WebhookUrls.enqueue_events(@template, 'template.created')
+
+      redirect_to(edit_template_path(@template))
     else
-      render turbo_stream: turbo_stream.replace(:modal, template: 'templates/new'), status: :unprocessable_entity
+      render turbo_stream: turbo_stream.replace(:modal, template: 'templates/new'), status: :unprocessable_content
     end
+  end
+
+  def update
+    @template.assign_attributes(template_params)
+
+    is_name_changed = @template.name_changed?
+
+    @template.save!
+
+    SearchEntries.enqueue_reindex(@template) if is_name_changed
+
+    WebhookUrls.enqueue_events(@template, 'template.updated')
+
+    head :ok
   end
 
   def destroy
     notice =
-      if params[:permanently].present?
+      if params[:permanently].in?(['true', true])
         @template.destroy!
 
-        Rollbar.info("Remove template: #{@template.id}") if defined?(Rollbar)
-
-        'Template has been removed.'
+        I18n.t('template_has_been_removed')
       else
         @template.update!(archived_at: Time.current)
 
-        'Template has been archived.'
+        WebhookUrls.enqueue_events(@template, 'template.archived')
+
+        I18n.t('template_has_been_archived')
       end
 
-    redirect_back(fallback_location: root_path, notice:)
+    if @template.destroyed? && turbo_native_app?
+      redirect_to templates_archived_index_path, notice:
+    else
+      redirect_back(fallback_location: root_path, notice:)
+    end
   end
 
   private
 
-  def template_params
-    params.require(:template).permit(:name)
+  def render_infinite_scroll(pagy, submissions, template)
+    render turbo_stream: [
+      turbo_stream.before('infinite_scroll', partial: 'templates/submission', collection: submissions,
+                                             locals: { template:, archived: template.archived_at? }),
+      turbo_stream.replace('infinite_scroll', partial: 'shared/infinite_scroll', locals: { pagy: })
+    ]
   end
 
-  def load_base_template
-    return if params[:base_template_id].blank?
-
-    @base_template = Template.accessible_by(current_ability).find_by(id: params[:base_template_id])
+  def template_params
+    params.require(:template).permit(
+      :name,
+      { schema: [[:attachment_uuid, :google_drive_file_id, :name, :dynamic,
+                  { conditions: [%i[field_uuid value action operation]] }]],
+        submitters: [%i[name uuid is_requester linked_to_uuid invite_via_field_uuid
+                        invite_by_uuid optional_invite_by_uuid email order]],
+        variables_schema: {},
+        fields: [[:uuid, :submitter_uuid, :name, :type,
+                  :required, :readonly, :default_value,
+                  :title, :description, :prefillable,
+                  { preferences: {},
+                    default_value: [],
+                    conditions: [%i[field_uuid value action operation]],
+                    options: [%i[value uuid]],
+                    validation: %i[message pattern min max step],
+                    areas: [%i[uuid x y w h cell_w attachment_uuid option_uuid page]] }]] }
+    )
   end
 end

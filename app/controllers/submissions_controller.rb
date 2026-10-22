@@ -1,26 +1,40 @@
 # frozen_string_literal: true
 
 class SubmissionsController < ApplicationController
-  before_action :load_template, only: %i[new create]
-  authorize_resource :template, only: %i[new create]
-
+  load_and_authorize_resource :template, only: %i[new create]
   load_and_authorize_resource :submission, only: %i[show destroy]
 
-  PRELOAD_ALL_PAGES_AMOUNT = 200
+  prepend_before_action :maybe_redirect_com, only: %i[show]
+
+  before_action only: :create do
+    authorize!(:create, Submission)
+  end
+
+  FIELD_ICONS = {
+    'text' => 'text_size', 'signature' => 'writing_sign', 'date' => 'calendar_event',
+    'number' => 'square_number_1', 'image' => 'photo', 'initials' => 'letter_case_upper',
+    'file' => 'paperclip', 'select' => 'select', 'checkbox' => 'checkbox', 'radio' => 'circle_dot',
+    'stamp' => 'rubber_stamp', 'cells' => 'columns_3', 'multiple' => 'checks', 'phone' => 'phone_check',
+    'payment' => 'credit_card', 'verification' => 'id', 'kba' => 'user_scan'
+  }.freeze
+
+  STATUS_BADGES = {
+    'awaiting' => 'badge-info', 'sent' => 'badge-info', 'completed' => 'badge-success',
+    'opened' => 'badge-warning', 'declined' => 'badge-error'
+  }.freeze
+
+  STATUS_ICONS = {
+    'awaiting' => 'clock', 'sent' => 'send', 'completed' => 'circle_check',
+    'opened' => 'mail_opened', 'declined' => 'x_circle'
+  }.freeze
 
   def show
-    ActiveRecord::Associations::Preloader.new(
-      records: [@submission],
-      associations: [:template, { template_schema_documents: :blob }]
-    ).call
+    @submission = Submissions.preload_with_pages(@submission)
 
-    total_pages =
-      @submission.template_schema_documents.sum { |e| e.metadata.dig('pdf', 'number_of_pages').to_i }
-
-    if total_pages < PRELOAD_ALL_PAGES_AMOUNT
+    unless @submission.completed_at?
       ActiveRecord::Associations::Preloader.new(
-        records: @submission.template_schema_documents,
-        associations: [:blob, { preview_images_attachments: :blob }]
+        records: [@submission],
+        associations: [{ submitters: :start_form_submission_events }]
       ).call
     end
 
@@ -29,15 +43,16 @@ class SubmissionsController < ApplicationController
 
   def new
     authorize!(:new, Submission)
+
+    render :new, layout: 'plain'
   end
 
   def create
-    authorize!(:create, Submission)
+    return redirect_to template_path(@template), alert: I18n.t('template_has_been_archived') if @template.archived_at?
 
-    if params[:is_custom_message] != '1'
-      params.delete(:subject)
-      params.delete(:body)
-    end
+    save_template_message(@template, params) if params[:save_message] == '1' && can?(:update, @template)
+
+    [params.delete(:subject), params.delete(:body)] if params[:is_custom_message] != '1'
 
     submissions =
       if params[:emails].present?
@@ -48,33 +63,94 @@ class SubmissionsController < ApplicationController
                                        emails: params[:emails],
                                        params: params.merge('send_completed_email' => true))
       else
-        Submissions.create_from_submitters(template: @template,
-                                           user: current_user,
-                                           source: :invite,
-                                           submitters_order: params[:preserve_order] == '1' ? 'preserved' : 'random',
-                                           mark_as_sent: params[:send_email] == '1',
-                                           submissions_attrs: submissions_params[:submission].to_h.values,
-                                           params: params.merge('send_completed_email' => true))
+        create_submissions(@template, submissions_params, params)
       end
+
+    raise Submissions::CreateFromSubmitters::BaseError, 'Invalid email address' if submissions.blank?
+
+    WebhookUrls.enqueue_events(submissions, 'submission.created')
 
     Submissions.send_signature_requests(submissions)
 
-    redirect_to template_path(@template), notice: 'New recipients have been added'
+    SearchEntries.enqueue_reindex(submissions)
+
+    redirect_to template_path(@template), notice: I18n.t('new_recipients_have_been_added')
+  rescue Submissions::CreateFromSubmitters::BaseError => e
+    render turbo_stream: turbo_stream.replace(:submitters_error, partial: 'submissions/error',
+                                                                 locals: { error: e.message }),
+           status: :unprocessable_content
   end
 
   def destroy
-    @submission.update!(archived_at: Time.current)
+    notice =
+      if params[:permanently].in?(['true', true])
+        @submission.destroy!
 
-    redirect_back(fallback_location: template_path(@submission.template), notice: 'Submission has been archived')
+        I18n.t('submission_has_been_removed')
+      else
+        @submission.update!(archived_at: Time.current)
+
+        WebhookUrls.enqueue_events(@submission, 'submission.archived')
+
+        I18n.t('submission_has_been_archived')
+      end
+
+    if turbo_native_app? && request.format.turbo_stream?
+      flash.now[:notice] = notice
+
+      render turbo_stream: [turbo_stream.remove(@submission), turbo_stream.append_all('body', partial: 'shared/flash')]
+    else
+      redirect_back(fallback_location: @submission.template_id ? template_path(@submission.template) : root_path,
+                    notice:)
+    end
   end
 
   private
 
-  def submissions_params
-    params.permit(submission: { submitters: [%i[uuid email phone name]] })
+  def create_submissions(template, submissions_params, params)
+    normalize_message_submitter_uuids!(params)
+
+    submissions_attrs = submissions_params[:submission].to_h.values
+
+    submissions_attrs, _, new_fields =
+      Submissions::NormalizeParamUtils.normalize_submissions_params!(submissions_attrs, template, add_fields: true)
+
+    Submissions.create_from_submitters(template: template,
+                                       user: current_user,
+                                       source: :invite,
+                                       submitters_order: params[:preserve_order] == '1' ? 'preserved' : 'random',
+                                       submissions_attrs:,
+                                       new_fields:,
+                                       params: params.merge('send_completed_email' => true))
   end
 
-  def load_template
-    @template = Template.accessible_by(current_ability).find(params[:template_id])
+  def save_template_message(template, params)
+    template.preferences['request_email_subject'] = params[:subject] if params[:subject].present?
+    template.preferences['request_email_body'] = params[:body] if params[:body].present?
+
+    template.save!
+  end
+
+  def submissions_params
+    params.permit(submission: { submitters: [:uuid, :email, :phone, :name, { values: {} }] })
+  end
+
+  def normalize_message_submitter_uuids!(params)
+    return if params[:request_email_per_submitter] == '1'
+
+    uuids = params[:email_message_submitter_uuids]
+
+    return if uuids.blank?
+    return if params[:subject].blank? && params[:body].blank?
+
+    params[:submitter_preferences] =
+      Array.wrap(uuids).index_with { { 'subject' => params[:subject], 'body' => params[:body] } }
+
+    params[:request_email_per_submitter] = '1'
+
+    params.delete(:subject)
+    params.delete(:body)
+
+    params
   end
 end

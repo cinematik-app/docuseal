@@ -2,6 +2,30 @@
 
 Devise.otp_allowed_drift = 60.seconds
 
+class FailureApp < Devise::FailureApp
+  def respond
+    Rollbar.warning('Invalid password') if defined?(Rollbar) && warden_message == :invalid
+
+    super
+  end
+end
+
+module Devise
+  module Mailers
+    module Helpers
+      def devise_mail(record, action, opts = {}, &)
+        assign_message_metadata(action, record)
+
+        initialize_from_record(record)
+
+        I18n.with_locale(record.account.locale) do
+          mail(headers_for(action, opts), &)
+        end
+      end
+    end
+  end
+end
+
 # Assuming you have not yet modified this file, each configuration option below
 # is set to its default value. Note that some are commented out while others
 # are not: uncommented lines are intended to protect your configuration from
@@ -10,6 +34,7 @@ Devise.otp_allowed_drift = 60.seconds
 #
 # Use this hook to configure devise mailer, warden hooks and so forth.
 # Many of these configuration options can be set straight in your model.
+# rubocop:disable Metrics/BlockLength
 Devise.setup do |config|
   config.warden do |manager|
     manager.default_strategies(scope: :user).unshift(:two_factor_authenticatable)
@@ -113,7 +138,7 @@ Devise.setup do |config|
   # This can reduce the time taken to boot the app but if your application
   # requires the Devise mappings to be loaded during boot time the application
   # won't boot properly.
-  # config.reload_routes = true
+  config.reload_routes = false
 
   # ==> Configuration for :database_authenticatable
   # For bcrypt, this is the cost for hashing the password and defaults to 12. If
@@ -145,7 +170,7 @@ Devise.setup do |config|
   # without confirming their account.
   # Default is 0.days, meaning the user cannot access the website without
   # confirming their account.
-  # config.allow_unconfirmed_access_for = 2.days
+  config.allow_unconfirmed_access_for = nil
 
   # A period that the user is allowed to confirm their account before their
   # token becomes invalid. For example, if set to 3.days, the user can confirm
@@ -166,7 +191,7 @@ Devise.setup do |config|
 
   # ==> Configuration for :rememberable
   # The time the user will be remembered without asking for credentials again.
-  config.remember_for = 2.years
+  config.remember_for = ENV.fetch('SESSION_REMEMBER_DAYS', '730').to_i.days
 
   # Invalidates all the remember me tokens when the user signs out.
   config.expire_all_remember_me_on_sign_out = true
@@ -210,10 +235,10 @@ Devise.setup do |config|
 
   # Number of authentication tries before locking an account if lock_strategy
   # is failed attempts.
-  # config.maximum_attempts = 20
+  config.maximum_attempts = 15
 
   # Time interval to unlock the account if :time is enabled as unlock_strategy.
-  # config.unlock_in = 1.hour
+  config.unlock_in = 23.hours
 
   # Warn on the last attempt before the account is locked.
   # config.last_attempt_warning = true
@@ -277,6 +302,7 @@ Devise.setup do |config|
   config.warden do |manager|
     # manager.intercept_401 = false
     # manager.default_strategies(scope: :user).unshift(:auth_token)
+    manager.failure_app = FailureApp
   end
 
   # ==> Mountable engine configurations
@@ -299,7 +325,7 @@ Devise.setup do |config|
   # apps is `200 OK` and `302 Found respectively`, but new apps are generated with
   # these new defaults that match Hotwire/Turbo behavior.
   # Note: These might become the new default in future versions of Devise.
-  config.responder.error_status = :unprocessable_entity
+  config.responder.error_status = :unprocessable_content
   config.responder.redirect_status = :see_other
 
   # ==> Configuration for :registerable
@@ -310,3 +336,4 @@ Devise.setup do |config|
 
   ActiveSupport.run_load_hooks(:devise_config, config)
 end
+# rubocop:enable Metrics/BlockLength

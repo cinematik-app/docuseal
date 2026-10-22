@@ -1,10 +1,30 @@
 <template>
   <label
-    v-if="showFieldNames && field.name"
-    :for="field.uuid"
+    v-if="showFieldNames && (field.name || field.title)"
+    :id="field.uuid + '-group-label'"
     dir="auto"
-    class="label text-2xl mb-2"
-  >{{ field.name }}</label>
+    class="label text-xl sm:text-2xl py-0 mb-2 sm:mb-3.5 field-name-label"
+    :class="{ 'mb-2': !field.description }"
+  >
+    <MarkdownContent
+      v-if="field.title"
+      :string="field.title"
+    />
+    <template v-else>{{ field.name }}</template>
+    <template v-if="!field.required">
+      <span :class="{ 'hidden sm:inline': (field.title || field.name).length > 20 }">
+        ({{ t('optional') }})
+      </span>
+    </template>
+  </label>
+  <div
+    v-if="field.description"
+    :id="field.uuid + '-desc'"
+    dir="auto"
+    class="mb-3 px-1 field-description-text"
+  >
+    <MarkdownContent :string="field.description" />
+  </div>
   <div class="flex w-full max-h-44 overflow-y-auto">
     <input
       v-if="modelValue.length === 0"
@@ -24,6 +44,8 @@
     <div
       class="space-y-3.5 mx-auto"
       :class="{ hidden: !showOptions }"
+      role="group"
+      :aria-labelledby="showFieldNames && (field.name || field.title) ? field.uuid + '-group-label' : undefined"
     >
       <div
         v-for="(option, index) in field.options"
@@ -31,7 +53,8 @@
       >
         <label
           :for="option.uuid"
-          class="flex items-center space-x-3"
+          class="flex items-center space-x-3 checkbox-label"
+          @click="scrollIntoField(field)"
         >
           <input
             :id="option.uuid"
@@ -39,6 +62,7 @@
             type="checkbox"
             :name="`values[${field.uuid}][]`"
             :value="optionValue(option, index)"
+            :aria-describedby="field.description ? field.uuid + '-desc' : undefined"
             class="base-checkbox !h-7 !w-7"
             :checked="(modelValue || []).includes(optionValue(option, index))"
             @change="onChange"
@@ -53,8 +77,13 @@
 </template>
 
 <script>
+import MarkdownContent from './markdown_content'
+
 export default {
   name: 'MultiSelectStep',
+  components: {
+    MarkdownContent
+  },
   inject: ['t', 'scrollIntoField'],
   props: {
     field: {

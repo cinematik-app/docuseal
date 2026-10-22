@@ -5,11 +5,11 @@
     @touchstart="renderDropdown = true"
   >
     <div class="flex space-x-2 items-end">
-      <div class="group/contenteditable-container bg-base-100 rounded-md p-2 border border-base-300 w-full flex justify-between items-end">
+      <div class="group/contenteditable-container bg-base-100 rounded-md p-2 border border-base-300 w-full flex justify-between items-end roles-dropdown-label-mobile">
         <div class="flex items-center space-x-2">
           <span
             class="w-3 h-3 flex-shrink-0 rounded-full"
-            :class="colors[submitters.indexOf(selectedSubmitter)]"
+            :class="colors[submitters.indexOf(selectedSubmitter) % colors.length]"
           />
           <Contenteditable
             v-model="selectedSubmitter.name"
@@ -22,7 +22,7 @@
           />
         </div>
       </div>
-      <div class="dropdown dropdown-top dropdown-end">
+      <div class="dropdown dropdown-top dropdown-end roles-dropdown-mobile">
         <label
           tabindex="0"
           class="bg-base-100 cursor-pointer rounded-md p-2 border border-base-300 w-full flex justify-center"
@@ -37,6 +37,7 @@
           tabindex="0"
           class="rounded-md min-w-max mb-2"
           :class="menuClasses"
+          :style="menuStyle"
           @click="closeDropdown"
         >
           <li
@@ -51,8 +52,8 @@
             >
               <span class="py-1 flex items-center">
                 <span
-                  class="rounded-full w-3 h-3 ml-1 mr-3"
-                  :class="colors[index]"
+                  class="rounded-full w-3 h-3 ml-1 mr-3 flex-shrink-0"
+                  :class="colors[index % colors.length]"
                 />
                 <span>
                   {{ submitter.name }}
@@ -67,7 +68,7 @@
               </button>
             </a>
           </li>
-          <li v-if="submitters.length < 10 && editable">
+          <li v-if="submitters.length < names.length && editable">
             <a
               href="#"
               class="flex px-2"
@@ -78,7 +79,7 @@
                 :stroke-width="1.6"
               />
               <span class="py-1">
-                {{ t('add') }} {{ names[submitters.length] }}
+                {{ t('add') }} {{ names[lastPartyIndex] }}
               </span>
             </a>
           </li>
@@ -95,24 +96,24 @@
     <label
       v-if="compact"
       tabindex="0"
-      :title="selectedSubmitter.name"
+      :title="selectedSubmitter?.name"
       class="cursor-pointer text-base-100 flex h-full items-center justify-center"
     >
       <button
-        class="mx-1 w-3 h-3 rounded-full"
-        :class="colors[submitters.indexOf(selectedSubmitter)]"
+        class="mx-1 w-3 h-3 rounded-full flex-shrink-0"
+        :class="colors[submitters.indexOf(selectedSubmitter) % colors.length]"
       />
     </label>
     <label
       v-else
       ref="label"
       tabindex="0"
-      class="group cursor-pointer group/contenteditable-container rounded-md p-2 border border-base-300 hover:border-content w-full flex justify-between"
+      class="group cursor-pointer group/contenteditable-container rounded-md p-2 border border-base-300 hover:border-content w-full flex justify-between items-center"
     >
       <div class="flex items-center space-x-2">
         <span
-          class="w-3 h-3 rounded-full"
-          :class="colors[submitters.indexOf(selectedSubmitter)]"
+          class="w-3 h-3 rounded-full flex-shrink-0"
+          :class="colors[submitters.indexOf(selectedSubmitter) % colors.length]"
         />
         <Contenteditable
           v-model="selectedSubmitter.name"
@@ -124,7 +125,10 @@
           @update:model-value="$emit('name-change', selectedSubmitter)"
         />
       </div>
-      <span class="flex items-center transition-all duration-75 group-hover:border border-base-content/20 border-dashed w-6 h-6 flex justify-center items-center rounded">
+      <span
+        class="flex items-center transition-all duration-75 group-hover:border border-base-content/20 border-dashed w-6 h-6 justify-center rounded flex-shrink-0"
+        :class="{ border: isMobile }"
+      >
         <component
           :is="editable ? 'IconPlus' : 'IconChevronDown'"
           width="18"
@@ -136,22 +140,24 @@
       v-if="(editable || !compact) && renderDropdown"
       tabindex="0"
       :class="menuClasses"
+      :style="menuStyle"
       @click="closeDropdown"
     >
       <li
         v-for="(submitter, index) in submitters"
         :key="submitter.uuid"
+        class="w-full"
       >
         <a
           href="#"
-          class="flex px-2 group justify-between items-center"
-          :class="{ 'active': submitter === selectedSubmitter }"
+          class="flex px-2 text-sm group justify-between items-center"
+          :class="{ 'active': submitter === selectedSubmitter, 'py-0.5': submitters.length > 8 }"
           @click.prevent="selectSubmitter(submitter)"
         >
           <span class="py-1 flex items-center">
             <span
-              class="rounded-full w-3 h-3 ml-1 mr-3"
-              :class="colors[index]"
+              class="rounded-full w-3 h-3 ml-1 mr-3 flex-shrink-0"
+              :class="colors[index % colors.length]"
             />
             <span>
               {{ submitter.name }}
@@ -161,9 +167,12 @@
             v-if="!compact && submitters.length > 1 && editable"
             class="flex"
           >
-            <div class="flex-col pr-1 hidden group-hover:flex -mt-1 h-0">
+            <div
+              class="flex-col pr-1 flex -mt-1 h-0"
+              :class="{ 'invisible group-hover:visible': !isMobile }"
+            >
               <button
-                title="Up"
+                :title="t('up')"
                 class="relative w-2"
                 style="font-size: 10px; margin-bottom: -4px"
                 @click.prevent.stop="[move(submitter, -1), $refs.label.focus()] "
@@ -171,7 +180,7 @@
                 ▲
               </button>
               <button
-                title="Down"
+                :title="t('down')"
                 class="relative w-2"
                 style="font-size: 10px; margin-top: -4px"
                 @click.prevent.stop="[move(submitter, 1), $refs.label.focus()] "
@@ -181,7 +190,8 @@
             </div>
             <button
               v-if="!compact && submitters.length > 1 && editable"
-              class="hidden group-hover:block px-2"
+              class="px-2"
+              :class="{ 'invisible group-hover:visible': !isMobile }"
               @click.prevent.stop="remove(submitter)"
             >
               <IconTrashX :width="18" />
@@ -189,10 +199,13 @@
           </div>
         </a>
       </li>
-      <li v-if="submitters.length < 10 && editable && allowAddNew">
+      <li
+        v-if="submitters.length < names.length && editable && allowAddNew"
+        class="w-full"
+      >
         <a
           href="#"
-          class="flex px-2"
+          class="flex px-2 text-sm"
           @click.prevent="addSubmitter"
         >
           <IconUserPlus
@@ -200,7 +213,7 @@
             :stroke-width="1.6"
           />
           <span class="py-1">
-            {{ t('add') }} {{ names[submitters.length] }}
+            {{ t('add') }} {{ names[lastPartyIndex] }}
           </span>
         </a>
       </li>
@@ -213,6 +226,14 @@ import { IconUserPlus, IconTrashX, IconPlus, IconChevronUp, IconChevronDown } fr
 import Contenteditable from './contenteditable'
 import { v4 } from 'uuid'
 
+function getOrdinalSuffix (num) {
+  if (num % 10 === 1 && num % 100 !== 11) return 'st'
+  if (num % 10 === 2 && num % 100 !== 12) return 'nd'
+  if (num % 10 === 3 && num % 100 !== 13) return 'rd'
+
+  return 'th'
+}
+
 export default {
   name: 'FieldSubmitter',
   components: {
@@ -223,7 +244,7 @@ export default {
     IconTrashX,
     IconChevronUp
   },
-  inject: ['t', 'save'],
+  inject: ['t', 'save', 'isMobile'],
   props: {
     submitters: {
       type: Array,
@@ -253,10 +274,15 @@ export default {
       type: String,
       required: true
     },
+    menuStyle: {
+      type: Object,
+      required: false,
+      default: () => ({})
+    },
     menuClasses: {
       type: String,
       required: false,
-      default: 'dropdown-content menu p-2 shadow bg-base-100 rounded-box w-full z-10'
+      default: 'dropdown-content menu p-2 shadow rounded-box w-full z-10'
     }
   },
   emits: ['update:model-value', 'remove', 'new-submitter', 'name-change'],
@@ -281,6 +307,14 @@ export default {
       ]
     },
     names () {
+      const generatedNames = []
+
+      for (let i = 21; i < 101; i++) {
+        const suffix = getOrdinalSuffix(i)
+
+        generatedNames.push(`${i}${suffix} ${this.t('party')}`)
+      }
+
       return [
         this.t('first_party'),
         this.t('second_party'),
@@ -291,8 +325,28 @@ export default {
         this.t('seventh_party'),
         this.t('eighth_party'),
         this.t('ninth_party'),
-        this.t('tenth_party')
+        this.t('tenth_party'),
+        this.t('eleventh_party'),
+        this.t('twelfth_party'),
+        this.t('thirteenth_party'),
+        this.t('fourteenth_party'),
+        this.t('fifteenth_party'),
+        this.t('sixteenth_party'),
+        this.t('seventeenth_party'),
+        this.t('eighteenth_party'),
+        this.t('nineteenth_party'),
+        this.t('twentieth_party'),
+        ...generatedNames
       ]
+    },
+    lastPartyIndex () {
+      const index = Math.max(...this.submitters.map((s) => this.names.indexOf(s.name)))
+
+      if (index !== -1) {
+        return index + 1
+      } else {
+        return this.submitters.length
+      }
     },
     selectedSubmitter () {
       return this.submitters.find((e) => e.uuid === this.modelValue)
@@ -303,7 +357,7 @@ export default {
       this.$emit('update:model-value', submitter.uuid)
     },
     remove (submitter) {
-      if (window.confirm(this.t('are_you_sure'))) {
+      if (window.confirm(this.t('are_you_sure_'))) {
         this.$emit('remove', submitter)
       }
     },
@@ -326,7 +380,7 @@ export default {
     },
     addSubmitter () {
       const newSubmitter = {
-        name: this.names[this.submitters.length],
+        name: this.names[this.lastPartyIndex],
         uuid: v4()
       }
 
@@ -336,7 +390,7 @@ export default {
       this.$emit('new-submitter', newSubmitter)
     },
     closeDropdown () {
-      document.activeElement.blur()
+      this.$el.getRootNode().activeElement.blur()
     }
   }
 }

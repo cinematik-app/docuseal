@@ -4,27 +4,42 @@ class ApplicationController < ActionController::Base
   BROWSER_LOCALE_REGEXP = /\A\w{2}(?:-\w{2})?/
 
   include ActiveStorage::SetCurrent
-  include Pagy::Backend
+  include Pagy::Method
 
   check_authorization unless: :devise_controller?
 
+  around_action :with_locale
   before_action :sign_in_for_demo, if: -> { Docuseal.demo? }
   before_action :maybe_redirect_to_setup, unless: :signed_in?
   before_action :authenticate_user!, unless: :devise_controller?
 
+  before_action :set_csp, if: lambda {
+    request.get? && !request.headers['HTTP_X_TURBO_REQUEST_ID'] && !turbo_infinite_scroll?
+  }
+
   helper_method :button_title,
                 :current_account,
-                :svg_icon
+                :true_ability,
+                :form_link_host,
+                :svg_icon,
+                :turbo_native_ios?,
+                :turbo_native_android?
 
   impersonates :user, with: ->(uuid) { User.find_by(uuid:) }
 
-  rescue_from Pagy::OverflowError do
+  rescue_from Pagy::RangeError do
     redirect_to request.path
   end
 
-  if Rails.env.production?
+  rescue_from RateLimit::LimitApproached do |e|
+    Rollbar.error(e) if defined?(Rollbar)
+
+    redirect_back_or_to root_path, alert: 'Too many requests'
+  end
+
+  if Rails.env.production? || Rails.env.test?
     rescue_from CanCan::AccessDenied do |e|
-      Rollbar.error(e) if defined?(Rollbar)
+      Rollbar.warning(e) if defined?(Rollbar)
 
       redirect_to root_path, alert: e.message
     end
@@ -43,10 +58,52 @@ class ApplicationController < ActionController::Base
     request.session[:impersonated_user_id] = user.uuid
   end
 
+  def pagy_auto(collection, **keyword_args)
+    if current_ability.can?(:manage, :countless)
+      pagy(:countless, collection, **keyword_args)
+    else
+      pagy(collection, **keyword_args)
+    end
+  end
+
   private
 
+  def turbo_infinite_scroll?
+    request.headers['HTTP_X_TURBO_INFINITE_SCROLL'].present?
+  end
+
+  def turbo_native_app?
+    return @turbo_native_app if defined?(@turbo_native_app)
+
+    @turbo_native_app = request.user_agent.to_s.include?('Hotwire Native')
+  end
+
+  def turbo_native_ios?
+    return @turbo_native_ios if defined?(@turbo_native_ios)
+
+    @turbo_native_ios = request.user_agent.to_s.include?('Hotwire Native iOS')
+  end
+
+  def turbo_native_android?
+    return @turbo_native_android if defined?(@turbo_native_android)
+
+    @turbo_native_android = request.user_agent.to_s.include?('Hotwire Native Android')
+  end
+
+  def with_locale(&)
+    return yield unless current_account
+
+    locale   = params[:lang].presence if Rails.env.development?
+    locale ||= current_account.locale
+
+    I18n.with_locale(locale, &)
+  end
+
   def with_browser_locale(&)
-    locale = request.env['HTTP_ACCEPT_LANGUAGE'].to_s[BROWSER_LOCALE_REGEXP].to_s
+    return yield if I18n.locale != :'en-US' && I18n.locale != :en
+
+    locale   = params[:lang].presence
+    locale ||= request.env['HTTP_ACCEPT_LANGUAGE'].to_s[BROWSER_LOCALE_REGEXP].to_s
 
     locale =
       if locale.starts_with?('en-') && locale != 'en-US'
@@ -61,23 +118,60 @@ class ApplicationController < ActionController::Base
   end
 
   def sign_in_for_demo
-    sign_in(User.active.order('random()').take) unless signed_in?
+    return if signed_in?
+
+    account = Account.create!(name: "Demo #{SecureRandom.hex(3)}")
+
+    sign_in(account.users.create!(first_name: 'Demo', last_name: 'User',
+                                  email: "#{SecureRandom.hex}@docuseal.com", password: SecureRandom.hex))
   end
 
   def current_account
     current_user&.account
   end
 
+  def true_ability
+    @true_ability ||= Ability.new(true_user)
+  end
+
   def maybe_redirect_to_setup
     redirect_to setup_index_path unless User.exists?
   end
 
-  def button_title(title: 'Submit', disabled_with: 'Submitting', title_class: '', icon: nil, icon_disabled: nil)
+  def button_title(title: I18n.t('submit'), disabled_with: I18n.t('submitting'), title_class: '', icon: nil,
+                   icon_disabled: nil)
     render_to_string(partial: 'shared/button_title',
                      locals: { title:, disabled_with:, title_class:, icon:, icon_disabled: })
   end
 
   def svg_icon(icon_name, class: '')
     render_to_string(partial: "icons/#{icon_name}", locals: { class: })
+  end
+
+  def form_link_host
+    Docuseal.default_url_options[:host]
+  end
+
+  def maybe_redirect_com
+    return if request.domain != 'docuseal.co'
+
+    redirect_to request.url.gsub('.co/', '.com/'), allow_other_host: true, status: :moved_permanently
+  end
+
+  def set_csp
+    request.content_security_policy = current_content_security_policy.tap do |policy|
+      policy.default_src :self
+      policy.script_src :self
+      policy.style_src :self, :unsafe_inline
+      policy.img_src :self, :https, :http, :blob, :data
+      policy.font_src :self, :https, :http, :blob, :data
+      policy.manifest_src :self
+      policy.media_src :self
+      policy.frame_src :self
+      policy.worker_src :self, :blob
+      policy.connect_src :self
+
+      policy.directives['connect-src'] << 'ws:' if Rails.env.development?
+    end
   end
 end
