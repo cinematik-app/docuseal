@@ -1,7 +1,8 @@
 # frozen_string_literal: true
 
 namespace :encryption do
-  desc 'Re-encrypt every encrypted attribute with the current encryption secret (run with ENCRYPTION_SECRET_PREVIOUS set)'
+  desc 'Re-encrypt every encrypted attribute with the current encryption secret ' \
+       '(run with ENCRYPTION_SECRET_PREVIOUS set)'
   task reencrypt: :environment do
     [EncryptedConfig, EncryptedUserConfig, AccessToken, WebhookUrl].each do |model|
       count = 0

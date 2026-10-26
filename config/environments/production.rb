@@ -134,7 +134,8 @@ Rails.application.configure do
     previous_generator = Class.new(ActiveRecord::Encryption::KeyGenerator) do
       define_method(:key_derivation_salt) { previous[:key_derivation_salt] }
     end.new
-    previous_provider = ActiveRecord::Encryption::DerivedSecretKeyProvider.new(previous[:primary_key], key_generator: previous_generator)
+    previous_provider = ActiveRecord::Encryption::DerivedSecretKeyProvider.new(previous[:primary_key],
+                                                                               key_generator: previous_generator)
 
     config.active_record.encryption[:previous] = [{ key_provider: previous_provider }]
   end
